@@ -82,7 +82,7 @@ final class RecognizerDriver
      */
     public static function regionOf(Recognizer $r): ?Region
     {
-        if ($r instanceof RuleRecognizer || $r instanceof MultiRecognizer) {
+        if ($r instanceof RegionTagged) {
             return $r->region();
         }
         return null; // custom recognizers are Universal

@@ -28,6 +28,12 @@ final class EngineOptionTarget
     /** @var list<Region>|null null = every Region (Universal + all geo) enabled */
     public ?array $regions = null;
 
+    /**
+     * @var list<string>|null null = WithKeywords not seen; non-null (including
+     *                            the empty list from a zero-arg call) = seen
+     */
+    public ?array $keywords = null;
+
     /** @var array<string, Strategy> entity name => override strategy */
     public array $strategies = [];
 
@@ -83,6 +89,28 @@ final class EngineOptionTarget
             }
         }
         $this->regions = $regions;
+    }
+
+    /**
+     * Record the keyword list. Enforced ONCE-ONLY via $keywords !== null
+     * (the zero-argument WithKeywords() call stores [] and is still non-null,
+     * so a subsequent call is rejected without a dedicated flag).
+     *
+     * Per-keyword validation (non-empty / UTF-8 / duplicate / count / total and
+     * per-keyword byte caps) is delegated to KeywordMatcher construction in
+     * Engine::new(), which forwards the engine's FINAL MaxInputBytes as the
+     * per-keyword cap. This avoids both re-validating here with a stale
+     * MaxInputBytes (if WithMaxInputBytes comes after WithKeywords) and
+     * duplicating KeywordMatcher's validation constants.
+     *
+     * @param list<string> $keywords raw keyword list from WithKeywords()
+     */
+    public function setKeywords(array $keywords): void
+    {
+        if ($this->keywords !== null) {
+            throw new InvalidConfigException('WithKeywords may be called at most once');
+        }
+        $this->keywords = \array_values($keywords);
     }
 
     /**

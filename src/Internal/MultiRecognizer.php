@@ -15,7 +15,7 @@ use Yolorouter\Llmasking\{Finding, Recognizer, Region};
  * geo-filtering (which checks instanceof MultiRecognizer) treats the whole
  * bundle as Universal and never drops it.
  */
-final class MultiRecognizer implements Recognizer
+final class MultiRecognizer implements Recognizer, RegionTagged
 {
     /**
      * @param list<Recognizer> $subs

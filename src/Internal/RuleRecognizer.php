@@ -15,7 +15,7 @@ use Yolorouter\Llmasking\Exception\InvalidFindingException;
  * RuleRecognizer. Pcre::eachMatch enforces the raw-candidate cap directly as
  * a LimitExceededException, so no message-sniffing reclassification is needed.
  */
-final class RuleRecognizer implements Recognizer
+final class RuleRecognizer implements Recognizer, RegionTagged
 {
     public function __construct(
         private readonly string $name,

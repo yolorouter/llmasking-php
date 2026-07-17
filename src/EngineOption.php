@@ -22,6 +22,7 @@ final class EngineOption
     private const KIND_REGIONS = 'regions';
     private const KIND_STRATEGY = 'strategy';
     private const KIND_ENTITY_TYPE = 'entity_type';
+    private const KIND_KEYWORDS = 'keywords';
     private const KIND_MAX_ENTITIES = 'max_entities';
     private const KIND_MAX_SESSION_BYTES = 'max_session_bytes';
     private const KIND_MAX_INPUT_BYTES = 'max_input_bytes';
@@ -44,6 +45,22 @@ final class EngineOption
     public static function withRecognizers(Recognizer ...$recognizers): self
     {
         return new self(self::KIND_RECOGNIZERS, \array_values($recognizers));
+    }
+
+    /**
+     * Configure the keyword AC recognizer. At most one WithKeywords option is
+     * allowed per Engine::new() call; a second call throws InvalidConfigException
+     * (tracked by $keywords !== null — zero-arg stores [], which is non-null).
+     *
+     * Zero arguments is legal and marks keywords as "configured" without
+     * appending a recognizer (no patterns to match). Per-keyword validation
+     * (non-empty / UTF-8 / duplicate / count / byte caps) runs at Engine
+     * construction via KeywordMatcher; the engine's final MaxInputBytes is the
+     * per-keyword byte cap.
+     */
+    public static function withKeywords(string ...$keywords): self
+    {
+        return new self(self::KIND_KEYWORDS, \array_values($keywords));
     }
 
     /**
@@ -117,6 +134,11 @@ final class EngineOption
                 /** @var string $payload */
                 $payload = $this->payload;
                 $target->addEntityType($payload);
+                break;
+            case self::KIND_KEYWORDS:
+                /** @var list<string> $payload */
+                $payload = $this->payload;
+                $target->setKeywords($payload);
                 break;
             case self::KIND_MAX_ENTITIES:
                 /** @var int $payload */

@@ -5,7 +5,7 @@
 namespace Yolorouter\Llmasking;
 
 use Yolorouter\Llmasking\Exception\InvalidConfigException;
-use Yolorouter\Llmasking\Internal\{EngineOptionTarget, RecognizerDriver, Reversibility};
+use Yolorouter\Llmasking\Internal\{EngineOptionTarget, KeywordMatcher, KeywordRecognizer, RecognizerDriver, Reversibility};
 
 /**
  * Immutable, stateless, shareable masking engine. Constructed once from a list
@@ -16,7 +16,7 @@ final class Engine
 {
     private const RECOGNIZER_NAME_MAX_BYTES = 128;
 
-    private const RESERVED_NAME_KEYWORD = 'keyword';
+    private const RESERVED_NAME_KEYWORD = KeywordRecognizer::NAME;
 
     /** Fixed (spec 5.1): max RestoreEvents produced by one restore() call. */
     public const MAX_RESTORE_EVENTS = 65536;
@@ -57,6 +57,15 @@ final class Engine
 
         $recognizers = self::resolveRecognizers($target);
         self::validateRecognizerNames($recognizers);
+
+        // Append the keyword recognizer AFTER validation so its reserved name
+        // never enters the user-recognizer validation pass (no carve-out
+        // needed). KeywordMatcher construction validates the keyword list.
+        if ($target->keywords !== null && $target->keywords !== []) {
+            $recognizers[] = new KeywordRecognizer(
+                new KeywordMatcher($target->keywords, $target->maxInputBytes),
+            );
+        }
 
         // Sequence numbers range 1..MaxEntities, so their decimal width is the
         // width of MaxEntities itself; the placeholder lexer uses this to
@@ -116,9 +125,9 @@ final class Engine
      * Resolve the final, region-filtered recognizer list. WithRecognizers
      * (including the zero-argument form) overrides the built-in defaults
      * entirely; either way the SAME region filter applies — a geo-tagged
-     * recognizer (default or custom RuleRecognizer/MultiRecognizer) whose
-     * Region is not enabled is dropped, matching Go. Custom recognizers with no
-     * region tag are always Universal and never filtered.
+     * recognizer (default or custom RuleRecognizer/MultiRecognizer/KeywordRecognizer)
+     * whose Region is not enabled is dropped, matching Go. Custom recognizers
+     * with no region tag are always Universal and never filtered.
      *
      * @param EngineOptionTarget $target
      * @return list<Recognizer>
@@ -127,24 +136,25 @@ final class Engine
     {
         $list = $target->recognizers ?? self::defaultRecognizers();
         if ($target->regions === null) {
-            return $list;
+            $out = $list;
+        } else {
+            $enabled = [];
+            foreach ($target->regions as $r) {
+                $enabled[$r->value] = true;
+            }
+            $out = [];
+            foreach ($list as $recognizer) {
+                $region = RecognizerDriver::regionOf($recognizer);
+                if ($region === null || $region === Region::Universal) {
+                    $out[] = $recognizer;
+                    continue;
+                }
+                if (isset($enabled[$region->value])) {
+                    $out[] = $recognizer;
+                }
+            }
         }
 
-        $enabled = [];
-        foreach ($target->regions as $r) {
-            $enabled[$r->value] = true;
-        }
-        $out = [];
-        foreach ($list as $recognizer) {
-            $region = RecognizerDriver::regionOf($recognizer);
-            if ($region === null || $region === Region::Universal) {
-                $out[] = $recognizer;
-                continue;
-            }
-            if (isset($enabled[$region->value])) {
-                $out[] = $recognizer;
-            }
-        }
         return $out;
     }
 
@@ -194,8 +204,6 @@ final class Engine
                 );
             }
             if ($name === self::RESERVED_NAME_KEYWORD) {
-                // Reserved for the future keyword AC pipeline (Plan 2); reject
-                // it now so a custom recognizer cannot collide with it later.
                 throw new InvalidConfigException(
                     'recognizer name "' . self::RESERVED_NAME_KEYWORD . '" is reserved',
                 );
