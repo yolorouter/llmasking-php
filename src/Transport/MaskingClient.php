@@ -215,7 +215,7 @@ final class MaskingClient implements ClientInterface
             throw new InvalidRequestException($request, 'request body read stalled or failed', 0, $e);
         }
         if (\strlen($rawBody) > $maxInput) {
-            $body->rewind();
+            self::rewindBestEffort($body);
             // Resource-limit failure is NOT covered by WithPassthrough (spec §9.2).
             throw new InvalidRequestException(
                 $request,
@@ -230,7 +230,7 @@ final class MaskingClient implements ClientInterface
             try {
                 $decoded = $this->gunzipBounded($rawBody, $maxInput);
             } catch (LimitExceededException $e) {
-                $body->rewind();
+                self::rewindBestEffort($body);
                 throw new InvalidRequestException(
                     $request,
                     'gzip decoded body exceeds MaxInputBytes',
@@ -241,10 +241,10 @@ final class MaskingClient implements ClientInterface
                 // gzip format/corruption error. WithPassthrough may forward the
                 // original compressed wire untouched; otherwise fail-closed.
                 if ($this->passthrough) {
-                    $body->rewind();
+                    $this->rewindForForward($body, $request, "cannot restore request body for forwarding");
                     return new ProcessedRequest($request, null, '');
                 }
-                $body->rewind();
+                self::rewindBestEffort($body);
                 throw new InvalidRequestException($request, 'gzip decode failed', 0, $e);
             }
         } else {
@@ -255,7 +255,7 @@ final class MaskingClient implements ClientInterface
         //    bypass (spec §9.2). Original wire/header preserved; the response
         //    is not restored.
         if ($this->isJsonWhitespace($decoded)) {
-            $body->rewind();
+            $this->rewindForForward($body, $request, "cannot restore request body for forwarding");
             return new ProcessedRequest($request, null, '');
         }
 
@@ -265,7 +265,7 @@ final class MaskingClient implements ClientInterface
         try {
             $doc = JsonTokenizer::parse($decoded);
         } catch (LimitExceededException $e) {
-            $body->rewind();
+            self::rewindBestEffort($body);
             throw new InvalidRequestException(
                 $request,
                 'JSON tokenizer resource limit exceeded',
@@ -274,10 +274,10 @@ final class MaskingClient implements ClientInterface
             );
         } catch (JsonSyntaxException $e) {
             if ($this->passthrough) {
-                $body->rewind();
+                $this->rewindForForward($body, $request, "cannot restore request body for forwarding");
                 return new ProcessedRequest($request, null, '');
             }
-            $body->rewind();
+            self::rewindBestEffort($body);
             throw new InvalidRequestException($request, 'invalid JSON syntax', 0, $e);
         }
 
@@ -299,7 +299,7 @@ final class MaskingClient implements ClientInterface
                 $newBody = $decoded;
             }
         } catch (\Throwable $e) {
-            $body->rewind();
+            self::rewindBestEffort($body);
             throw new InvalidRequestException(
                 $request,
                 'masking failed during request processing',
@@ -311,7 +311,7 @@ final class MaskingClient implements ClientInterface
         // 11. Final request body budget (spec §5.1: anonymize/mask/final
         //     request output bounded by MaxOutputBytes).
         if (\strlen($newBody) > $this->engine->maxOutputBytes) {
-            $body->rewind();
+            self::rewindBestEffort($body);
             throw new InvalidRequestException(
                 $request,
                 'masked request body exceeds MaxOutputBytes',
@@ -324,13 +324,13 @@ final class MaskingClient implements ClientInterface
         //     wire bytes (gzip wire is preserved as-is per spec §9.3).
         $bodyChanged = $patches !== [];
         if (!$bodyChanged) {
-            $body->rewind();
+            $this->rewindForForward($body, $request, "cannot restore request body for forwarding");
             return new ProcessedRequest($request, $session, $rawBody);
         }
 
         // Integrity / signature headers would be invalidated by the rewrite.
         if ($this->hasIntegrityHeaders($request)) {
-            $body->rewind();
+            self::rewindBestEffort($body);
             throw new InvalidRequestException(
                 $request,
                 'cannot rewrite body: request carries integrity/signature headers',
@@ -810,6 +810,34 @@ final class MaskingClient implements ClientInterface
 
     // ---- Body / gzip helpers -----------------------------------------------
 
+    /**
+     * Best-effort rewind before FAILING: a rewind exception here must never mask
+     * the original error (PSR-7 allows rewind() to throw). The caller throws
+     * its own InvalidRequestException right after (codex med).
+     */
+    private static function rewindBestEffort(StreamInterface $body): void
+    {
+        try {
+            $body->rewind();
+        } catch (\Throwable) {
+            // best effort; the original failure is what matters
+        }
+    }
+
+    /**
+     * Rewind before FORWARDING / returning the original body. If the body
+     * cannot be restored to its start, forwarding it would emit a consumed /
+     * partial body, so degrade to fail-closed (spec §9.2 / codex med).
+     */
+    private function rewindForForward(StreamInterface $body, RequestInterface $request, string $reason): void
+    {
+        try {
+            $body->rewind();
+        } catch (\Throwable $e) {
+            throw new InvalidRequestException($request, $reason, 0, $e);
+        }
+    }
+
     private function readBounded(StreamInterface $stream, int $limit): string
     {
         $data = '';
@@ -1054,8 +1082,14 @@ final class MaskingClient implements ClientInterface
     private function withRawBody(ResponseInterface $response, StreamInterface $body, string $raw): ResponseInterface
     {
         if ($body->isSeekable()) {
-            $body->rewind();
-            return $response;
+            try {
+                $body->rewind();
+
+                return $response;
+            } catch (\Throwable) {
+                // rewind failed: fall back to a fresh stream from the captured
+                // bytes (spec §9.4: never return a body sitting at EOF).
+            }
         }
 
         return $response->withBody($this->streamFactory->createStream($raw));
