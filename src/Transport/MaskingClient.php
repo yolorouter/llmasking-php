@@ -148,6 +148,14 @@ final class MaskingClient implements ClientInterface
             return $this->inner->sendRequest($processed->outgoingRequest);
         }
 
+        // Build the restore-report snapshot BEFORE sending so a stream-factory
+        // failure is observable before the POST fires (no post-send escape that
+        // would lose a successful response and risk a retry's duplicate side
+        // effect) (codex med).
+        $snapshot = $this->restoreCallback !== null
+            ? $this->snapshotRequest($processed->outgoingRequest, $processed->outgoingBodyBytes)
+            : null;
+
         $response = $this->inner->sendRequest($processed->outgoingRequest);
 
         return $this->processResponse(
@@ -155,6 +163,7 @@ final class MaskingClient implements ClientInterface
             $processed->session,
             $processed->outgoingRequest,
             $processed->outgoingBodyBytes,
+            $snapshot,
         );
     }
 
@@ -379,6 +388,7 @@ final class MaskingClient implements ClientInterface
         Session $session,
         RequestInterface $maskedRequest,
         string $outgoingBodyBytes,
+        ?RequestInterface $snapshot,
     ): ResponseInterface {
         // Content-Encoding must be empty/identity (spec §9.4: non-identity v1
         // passthrough; avoid corrupting compressed bytes).
@@ -390,7 +400,7 @@ final class MaskingClient implements ClientInterface
         // SSE response path (spec §9.5): exact text/event-stream drives an
         // SseRestorer through a forward-only RestoringStream body.
         if ($this->isExactTextEventStream($response)) {
-            return $this->processSseResponse($response, $session, $maskedRequest, $outgoingBodyBytes);
+            return $this->processSseResponse($response, $session, $maskedRequest, $outgoingBodyBytes, $snapshot);
         }
 
         if (!$this->isExactApplicationJson($response)) {
@@ -482,9 +492,8 @@ final class MaskingClient implements ClientInterface
             // may still exist and must reach the restore callback (spec §9.7:
             // success with events fires complete=true; codex #12).
             $rawResponse = $this->withRawBody($response, $respBody, $rawBody);
-            if ($this->restoreCallback !== null && $restoreEvents !== []) {
+            if ($this->restoreCallback !== null && $restoreEvents !== [] && $snapshot !== null) {
                 $transportEvents = $this->toTransportRestoreEvents($restoreEvents);
-                $snapshot = $this->snapshotRequest($maskedRequest, $outgoingBodyBytes);
                 /** @var callable(RequestInterface, list<RestoreEvent>, bool, ?\Throwable): void $cb */
                 $cb = $this->restoreCallback;
                 try {
@@ -558,9 +567,8 @@ final class MaskingClient implements ClientInterface
             // best effort
         }
 
-        if ($this->restoreCallback !== null && $restoreEvents !== []) {
+        if ($this->restoreCallback !== null && $restoreEvents !== [] && $snapshot !== null) {
             $transportEvents = $this->toTransportRestoreEvents($restoreEvents);
-            $snapshot = $this->snapshotRequest($maskedRequest, $outgoingBodyBytes);
             /** @var callable(RequestInterface, list<RestoreEvent>, bool, ?\Throwable): void $cb */
             $cb = $this->restoreCallback;
             try {
@@ -592,8 +600,27 @@ final class MaskingClient implements ClientInterface
         Session $session,
         RequestInterface $maskedRequest,
         string $outgoingBodyBytes,
+        ?RequestInterface $snapshot,
     ): ResponseInterface {
         $respBody = $response->getBody();
+
+        // The SSE path must read from the body's start: a seekable body whose
+        // cursor is past 0 (a compliant inner client may return one) would
+        // silently drop prefix events. Rewind seekable bodies; a rewind failure
+        // degrades to a failed body (spec §9.4 / codex med).
+        if ($respBody->isSeekable()) {
+            try {
+                $respBody->rewind();
+            } catch (\Throwable $e) {
+                return $this->withFailedBody(
+                    $response,
+                    $respBody,
+                    new StreamRestoreException('SSE response body rewind failed', 0, $e),
+                    $maskedRequest,
+                    $outgoingBodyBytes,
+                );
+            }
+        }
 
         if ($response->getStatusCode() === 206 || $response->hasHeader('Content-Range')) {
             return $this->withFailedBody(
@@ -624,8 +651,7 @@ final class MaskingClient implements ClientInterface
         $restorer = new SseRestorer($session, $this->restoreCallback !== null);
 
         $completion = null;
-        if ($this->restoreCallback !== null) {
-            $snapshot = $this->snapshotRequest($maskedRequest, $outgoingBodyBytes);
+        if ($this->restoreCallback !== null && $snapshot !== null) {
             /** @var callable(RequestInterface, list<RestoreEvent>, bool, ?\Throwable): void $cb */
             $cb = $this->restoreCallback;
             $completion = static function (array $events, bool $complete, ?\Throwable $error) use ($snapshot, $cb): void {
@@ -686,17 +712,27 @@ final class MaskingClient implements ClientInterface
         // failure handler — no recursion).
         $finalError = $error;
         if (!$suppressCallback && $this->restoreCallback !== null) {
-            $snapshot = $this->snapshotRequest($maskedRequest, $outgoingBodyBytes);
-            /** @var callable(RequestInterface, list<RestoreEvent>, bool, ?\Throwable): void $cb */
-            $cb = $this->restoreCallback;
+            // Build the snapshot, but never let a stream-factory failure escape
+            // after the inner POST has already fired (it would lose the response
+            // and risk a retry's duplicate side effect). If the snapshot cannot
+            // be built, skip the failure report and still return the failed body.
             try {
-                $cb($snapshot, [], false, $error);
-            } catch (\Throwable $cbErr) {
-                $finalError = new StreamRestoreException(
-                    'restore report callback failed',
-                    0,
-                    $cbErr,
-                );
+                $snapshot = $this->snapshotRequest($maskedRequest, $outgoingBodyBytes);
+            } catch (\Throwable) {
+                $snapshot = null;
+            }
+            if ($snapshot !== null) {
+                /** @var callable(RequestInterface, list<RestoreEvent>, bool, ?\Throwable): void $cb */
+                $cb = $this->restoreCallback;
+                try {
+                    $cb($snapshot, [], false, $error);
+                } catch (\Throwable $cbErr) {
+                    $finalError = new StreamRestoreException(
+                        'restore report callback failed',
+                        0,
+                        $cbErr,
+                    );
+                }
             }
         }
 

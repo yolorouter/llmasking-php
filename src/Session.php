@@ -150,7 +150,13 @@ final class Session
         foreach ($pendings as [$finding, $placeholder, $reversible]) {
             $out .= \substr($text, $last, $finding->start - $last) . $placeholder;
             $last = $finding->end;
-            if ($trackState) {
+            // Report only findings that were actually masked: an identity
+            // Strategy (or any Strategy returning the original text) leaves the
+            // plaintext in place, so emitting a MaskEvent for it would falsely
+            // claim the entity was masked and leak plaintext into the report.
+            // This also fixes the mixed-string case (identity + real findings in
+            // one value) the per-string walker gating cannot catch (codex med).
+            if ($trackState && $placeholder !== $finding->text) {
                 $events[] = new MaskEvent(
                     $finding->entity,
                     $finding->start,
