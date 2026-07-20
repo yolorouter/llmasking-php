@@ -492,9 +492,9 @@ final class SseRestorer
         try {
             $doc = JsonTokenizer::parse($joined);
         } catch (JsonSyntaxException $e) {
-            $this->fail(new StreamRestoreException('SSE data JSON parse failed: ' . $e->getMessage(), 0, $e));
+            $this->fail(new StreamRestoreException('SSE data JSON parse failed', 0, $e));
         } catch (LimitExceededException $e) {
-            $this->fail(new StreamRestoreException('SSE data JSON resource limit: ' . $e->getMessage(), 0, $e));
+            $this->fail(new StreamRestoreException('SSE data JSON resource limit', 0, $e));
         }
 
         $visits = [];
@@ -602,6 +602,10 @@ final class SseRestorer
             }
             $synthEntries[] = [$route, $flushResult->text, $this->ssePieces($flushResult)];
         }
+
+        // Charge each route's withheld buffer against the shared state budget
+        // after this frame's writes/flushes (spec §9.5 / codex high).
+        $this->checkStateBudget();
 
         // Multi-data-line events: collapse the SSE "\n" joiners to spaces AFTER
         // parsing, so a JSON string spanning data lines (which would contain a
@@ -1159,6 +1163,25 @@ final class SseRestorer
         }
     }
 
+    /**
+     * Charge the per-route withheld buffers (StreamRestorer retained input +
+     * incomplete UTF-8) against the shared totalSseStateBytesBudget, alongside
+     * the already-counted identity tokens. A route whose placeholder lexer is
+     * stuck (e.g. a long run of upper-case bytes never closing a placeholder)
+     * can otherwise retain up to MaxInputBytes each, blowing the budget without
+     * any check (spec §9.5 / codex high).
+     */
+    private function checkStateBudget(): void
+    {
+        $retained = 0;
+        foreach ($this->routes as $route) {
+            $retained += $route->restorer->retainedBytes();
+        }
+        if ($this->stateBytes + $retained > $this->totalSseStateBytesBudget) {
+            $this->fail(new StreamRestoreException('total SSE state bytes (identity + withheld) exceed budget'));
+        }
+    }
+
     // ---- Blanket flush ------------------------------------------------------
 
     /**
@@ -1333,8 +1356,14 @@ final class SseRestorer
         $out = [];
         foreach ($r->pieces as [$pText, $pEvents]) {
             $tp = [];
-            foreach ($pEvents as $se) {
-                $tp[] = $this->transportEvent($se);
+            // With no restore report enabled, do not construct or carry events
+            // at all: a long SSE response with many placeholders would else
+            // accumulate millions of unused RestoreEvent objects in the stream's
+            // committedEvents (codex high). Pieces carry text only then.
+            if ($this->reportEnabled) {
+                foreach ($pEvents as $se) {
+                    $tp[] = $this->transportEvent($se);
+                }
             }
             $out[] = [$pText, $tp];
         }

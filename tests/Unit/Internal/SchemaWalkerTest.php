@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Yolorouter\Llmasking\Internal\JsonPatch;
 use Yolorouter\Llmasking\Internal\SchemaWalker;
 use Yolorouter\Llmasking\Internal\JsonTokenizer;
+use Yolorouter\Llmasking\MaskEvent;
 
 /**
  * Coverage for the JSON Schema routing-key walker (spec §9.3 SchemaNode
@@ -23,14 +24,14 @@ final class SchemaWalkerTest extends TestCase
      * it receives and wraps it in brackets (always differs from the original,
      * guaranteeing a patch). getSeen() returns the recorded values.
      *
-     * @return array{0:\Closure(string):string, 1:\Closure():list<string>}
+     * @return array{0: \Closure(string): array{0:string, 1:list<MaskEvent>}, 1: \Closure(): list<string>}
      */
     private static function recordingProcessor(): array
     {
         $seen = [];
-        $processor = static function (string $decoded) use (&$seen): string {
+        $processor = static function (string $decoded) use (&$seen): array {
             $seen[] = $decoded;
-            return '<' . $decoded . '>';
+            return ['<' . $decoded . '>', []];
         };
         $getSeen = static function () use (&$seen): array {
             return $seen;
@@ -43,7 +44,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"description":"d","title":"t","$comment":"c","type":"object"}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame(['d', 't', 'c'], $getSeen());
         self::assertCount(3, $patches);
@@ -57,7 +58,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"description":null,"title":42,"$comment":true,"type":"string"}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame([], $getSeen());
         self::assertSame([], $patches);
@@ -68,7 +69,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"description":"root","items":{"description":"item"}}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame(['root', 'item'], $getSeen());
         self::assertCount(2, $patches);
@@ -79,7 +80,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"items":[{"description":"a"},{"description":"b"}]}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame(['a', 'b'], $getSeen());
         self::assertCount(2, $patches);
@@ -191,7 +192,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"description":"first","description":"second"}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame(['first', 'second'], $getSeen());
         self::assertCount(2, $patches);
@@ -223,13 +224,39 @@ final class SchemaWalkerTest extends TestCase
         // Processor returns the same string — no patch staged.
         $json = '{"description":"keep"}';
         $doc = JsonTokenizer::parse($json);
-        $patches = SchemaWalker::walk(
+        [$patches, $events] = SchemaWalker::walk(
             $doc->root,
             $doc->json,
-            static fn (string $s): string => $s,
+            static fn (string $s): array => [$s, [new MaskEvent('E', 0, 0, 0.0, 'r', true)]],
         );
 
         self::assertSame([], $patches);
+        // No phantom event: an identity (unchanged) result commits none (codex med).
+        self::assertSame([], $events);
+    }
+
+    public function testIdentityResultAlongsideRealPatchCommitsOnlyRealEvent(): void
+    {
+        // description is identity (no change → no event); title changes (patch →
+        // its event committed). Only the real patch's event is reported.
+        $json = '{"description":"a","title":"b"}';
+        $doc = JsonTokenizer::parse($json);
+        $call = 0;
+        [$patches, $events] = SchemaWalker::walk(
+            $doc->root,
+            $doc->json,
+            static function (string $decoded) use (&$call): array {
+                $call++;
+                // description (call 1): identity; title (call 2): changed.
+                return $call === 1
+                    ? [$decoded, [new MaskEvent('ID', 0, 0, 0.0, $decoded, true)]]
+                    : ['<' . $decoded . '>', [new MaskEvent('REAL', 0, 0, 0.0, '<' . $decoded . '>', true)]];
+            },
+        );
+
+        self::assertCount(1, $patches);
+        self::assertCount(1, $events);
+        self::assertSame('REAL', $events[0]->entity);
     }
 
     public function testEmptyObjectSchemaIsNoOp(): void
@@ -237,7 +264,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         self::assertSame([], $getSeen());
         self::assertSame([], $patches);
@@ -249,7 +276,7 @@ final class SchemaWalkerTest extends TestCase
         foreach (['true', 'false', 'null', '"hello"', '42'] as $json) {
             $doc = JsonTokenizer::parse($json);
             [$proc, $getSeen] = self::recordingProcessor();
-            $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+            [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
             self::assertSame([], $getSeen(), "root=$json");
             self::assertSame([], $patches, "root=$json");
@@ -262,7 +289,7 @@ final class SchemaWalkerTest extends TestCase
             '"description":"root"}';
         $doc = JsonTokenizer::parse($json);
         [$proc, $getSeen] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         // Root description first, then allOf → properties.a → allOf → properties.b → description.
         self::assertSame(['root', 'deep'], $getSeen());
@@ -274,10 +301,10 @@ final class SchemaWalkerTest extends TestCase
         // Verify the span in each patch covers the content bytes (not framing quotes).
         $json = '{"description":"abc"}';
         $doc = JsonTokenizer::parse($json);
-        $patches = SchemaWalker::walk(
+        [$patches] = SchemaWalker::walk(
             $doc->root,
             $doc->json,
-            static fn (string $s): string => 'X',
+            static fn (string $s): array => ['X', []],
         );
 
         self::assertCount(1, $patches);
@@ -316,7 +343,7 @@ final class SchemaWalkerTest extends TestCase
         $json = '{"description":"mask me","type":"object","properties":{"x":{"type":"integer"}}}';
         $doc = JsonTokenizer::parse($json);
         [$proc] = self::recordingProcessor();
-        $patches = SchemaWalker::walk($doc->root, $doc->json, $proc);
+        [$patches] = SchemaWalker::walk($doc->root, $doc->json, $proc);
 
         $out = JsonPatch::apply($json, $patches);
         self::assertStringContainsString('"type":"object"', $out);

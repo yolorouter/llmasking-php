@@ -197,9 +197,23 @@ final class MaskingClient implements ClientInterface
 
         // 5. Rewind + bounded read (MaxInputBytes + 1 so an off-by-one detects
         //    the oversize case).
-        $body->rewind();
         $maxInput = $this->engine->maxInputBytes;
-        $rawBody = $this->readBounded($body, $maxInput + 1);
+        try {
+            // The initial rewind sits inside the same try so a rewind failure
+            // (PSR-7 allows it to throw) becomes the fail-closed result too.
+            $body->rewind();
+            $rawBody = $this->readBounded($body, $maxInput + 1);
+        } catch (\Throwable $e) {
+            // A stall / read failure is NOT a normal bypass: fail closed so the
+            // body is never forwarded unmasked (spec §9.2 / codex high). The
+            // best-effort rewind must not mask the original failure.
+            try {
+                $body->rewind();
+            } catch (\Throwable) {
+                // best effort
+            }
+            throw new InvalidRequestException($request, 'request body read stalled or failed', 0, $e);
+        }
         if (\strlen($rawBody) > $maxInput) {
             $body->rewind();
             // Resource-limit failure is NOT covered by WithPassthrough (spec §9.2).
@@ -344,7 +358,7 @@ final class MaskingClient implements ClientInterface
                     $cb($snapshot, $transportEvents);
                 } catch (\Throwable $e) {
                     throw new RequestReportException(
-                        'mask report callback failed: ' . $e->getMessage(),
+                        'mask report callback failed',
                         0,
                         $e,
                     );
@@ -407,7 +421,7 @@ final class MaskingClient implements ClientInterface
             return $this->withFailedBody(
                 $response,
                 $respBody,
-                new StreamRestoreException('response body read failed: ' . $e->getMessage(), 0, $e),
+                new StreamRestoreException('response body read failed', 0, $e),
                 $maskedRequest,
                 $outgoingBodyBytes,
             );
@@ -436,7 +450,7 @@ final class MaskingClient implements ClientInterface
             return $this->withFailedBody(
                 $response,
                 $respBody,
-                new StreamRestoreException('response JSON parse failed: ' . $e->getMessage(), 0, $e),
+                new StreamRestoreException('response JSON parse failed', 0, $e),
                 $maskedRequest,
                 $outgoingBodyBytes,
             );
@@ -479,7 +493,7 @@ final class MaskingClient implements ClientInterface
                     return $this->withFailedBody(
                         $rawResponse,
                         $rawResponse->getBody(),
-                        new StreamRestoreException('restore report callback failed: ' . $e->getMessage(), 0, $e),
+                        new StreamRestoreException('restore report callback failed', 0, $e),
                         $maskedRequest,
                         $outgoingBodyBytes,
                         true,
@@ -529,7 +543,7 @@ final class MaskingClient implements ClientInterface
                 $respBody,
                 $e instanceof StreamRestoreException
                     ? $e
-                    : new StreamRestoreException('response body transform failed: ' . $e->getMessage(), 0, $e),
+                    : new StreamRestoreException('response body transform failed', 0, $e),
                 $maskedRequest,
                 $outgoingBodyBytes,
             );
@@ -557,7 +571,7 @@ final class MaskingClient implements ClientInterface
                 return $this->withFailedBody(
                     $newResponse,
                     $newResponse->getBody(),
-                    new StreamRestoreException('restore report callback failed: ' . $e->getMessage(), 0, $e),
+                    new StreamRestoreException('restore report callback failed', 0, $e),
                     $maskedRequest,
                     $outgoingBodyBytes,
                     true,
@@ -679,7 +693,7 @@ final class MaskingClient implements ClientInterface
                 $cb($snapshot, [], false, $error);
             } catch (\Throwable $cbErr) {
                 $finalError = new StreamRestoreException(
-                    'restore report callback failed: ' . $cbErr->getMessage(),
+                    'restore report callback failed',
                     0,
                     $cbErr,
                 );
@@ -799,13 +813,24 @@ final class MaskingClient implements ClientInterface
     private function readBounded(StreamInterface $stream, int $limit): string
     {
         $data = '';
-        while (!$stream->eof() && \strlen($data) < $limit) {
+        // Track eof() in a local so the read()-may-flip-eof semantics stay
+        // visible to the analyser (PSR-7 lets a non-blocking stream return ''
+        // before eof). Treating such a stall as end-of-body would silently
+        // truncate the read and, on the request side, bypass masking; fail
+        // closed instead (codex high).
+        $atEof = $stream->eof();
+        while (!$atEof && \strlen($data) < $limit) {
             $remaining = $limit - \strlen($data);
             $chunk = $stream->read(\min(65536, $remaining));
             if ($chunk === '') {
+                $atEof = $stream->eof();
+                if (!$atEof) {
+                    throw new \RuntimeException('stream returned an empty read before EOF');
+                }
                 break;
             }
             $data .= $chunk;
+            $atEof = $stream->eof();
         }
 
         return $data;

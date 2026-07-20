@@ -185,6 +185,19 @@ final class StreamRestorer
         throw $e;
     }
 
+    /**
+     * Bytes currently retained (un-emitted input + any carried incomplete UTF-8
+     * codepoint). Used by the SSE layer to charge the per-route withheld buffer
+     * against the shared totalSseStateBytesBudget (spec §9.5 / codex high).
+     */
+    public function retainedBytes(): int
+    {
+        // Withheld input + incomplete UTF-8 + the lexer's partial-candidate
+        // buffers (a long upper-case/digit run held in $entity/$digits/$held
+        // on top of $input) — all charged to the SSE state budget (codex).
+        return \strlen($this->input) + \strlen($this->utf8Partial) + $this->lexer->retainedBytes();
+    }
+
     /** Length of a truncated UTF-8 sequence at the end of $s (0 if none). */
     private static function trailingIncompleteLen(string $s): int
     {

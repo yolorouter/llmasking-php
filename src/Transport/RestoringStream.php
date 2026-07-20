@@ -334,9 +334,22 @@ final class RestoringStream implements StreamInterface
                 break;
             }
         }
+        if ($this->upstreamStalled) {
+            // A non-blocking upstream returned '' without eof mid-aggregation:
+            // return what we have WITHOUT terminating the stream (codex med).
+            // The caller retries; close()/a later read reports completion.
+            $out = $this->buffer;
+            $n = \strlen($out);
+            $this->buffer = '';
+            $this->delivered += $n;
+            $this->deliverBytes($n);
+
+            return $out;
+        }
         if (!$this->isFullyDrained() || \strlen($this->buffer) > $this->materializeBudget) {
-            // Aggregation buffer would exceed materializeBudget. This is a
-            // terminal failure: discard this call's undelivered output/events.
+            // Aggregation buffer exceeds materializeBudget while more output
+            // remains. This is the spec §9.6 terminal failure: large responses
+            // must be drained via read() loops, not getContents().
             $budgetError = new StreamRestoreException(
                 'getContents aggregation exceeds materializeBudget',
             );
@@ -427,7 +440,7 @@ final class RestoringStream implements StreamInterface
             try {
                 $chunk = $this->upstream->read($want);
             } catch (\Throwable $e) {
-                return new StreamRestoreException('upstream read failed: ' . $e->getMessage(), 0, $e);
+                return new StreamRestoreException('upstream read failed', 0, $e);
             }
             if ($chunk === '') {
                 if ($this->upstream->eof()) {

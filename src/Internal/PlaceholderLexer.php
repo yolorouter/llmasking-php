@@ -196,6 +196,17 @@ final class PlaceholderLexer
         return $this->state === self::S_LITERAL ? $this->offset : $this->candStart;
     }
 
+    /**
+     * Bytes held in the partial-candidate buffers ($entity, $digits, $held).
+     * A long run of upper-case or digit bytes (e.g. a placeholder entity that
+     * never closes) accumulates here on top of the caller's withheld input, so
+     * the SSE state budget must charge both to bound memory (spec §9.5 / codex).
+     */
+    public function retainedBytes(): int
+    {
+        return \strlen($this->entity) + \strlen($this->digits) + \strlen($this->held);
+    }
+
     private function resetCandidate(): void
     {
         $this->state = self::S_LITERAL;

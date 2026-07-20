@@ -308,22 +308,23 @@ final class RequestWalker
     private function walkSchema(JsonValue $node): void
     {
         $session = $this->session;
-        $patches = SchemaWalker::walk(
+        [$patches, $schemaEvents] = SchemaWalker::walk(
             $node,
             $this->doc->json,
-            function (string $decoded) use ($session): string {
+            function (string $decoded) use ($session): array {
                 $result = $session->anonymize($decoded);
-                if ($this->collectEvents) {
-                    foreach ($result->events as $event) {
-                        $this->events[] = $event;
-                    }
-                }
-                return $result->text;
+                // Return the text plus a staging list of events; SchemaWalker
+                // commits them only when it stages the matching patch, so an
+                // identity result (no change) yields no phantom event (codex med).
+                return [$result->text, $this->collectEvents ? $result->events : []];
             },
             $this->budget,
         );
         foreach ($patches as $patch) {
             $this->patches[] = $patch;
+        }
+        foreach ($schemaEvents as $event) {
+            $this->events[] = $event;
         }
     }
 

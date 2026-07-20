@@ -4,6 +4,8 @@
 
 namespace Yolorouter\Llmasking\Internal;
 
+use Yolorouter\Llmasking\MaskEvent;
+
 /**
  * JSON Schema routing-key walker (spec §9.3 SchemaNode traversal).
  *
@@ -71,6 +73,9 @@ final class SchemaWalker
     /** @var list<JsonPatchEntry> */
     private array $patches = [];
 
+    /** @var list<MaskEvent> events committed alongside actually-staged patches */
+    private array $events = [];
+
     private function __construct(
         private readonly string $json,
         private readonly \Closure $process,
@@ -82,21 +87,23 @@ final class SchemaWalker
      * Walk a SchemaNode subtree, staging patches for every description/title/
      * $comment string value found.
      *
-     * $process receives each decoded string value and returns its replacement.
-     * A patch is staged only when the replacement differs from the decoded
-     * original (spec §9.3: only actual replacements generate patches). Each
-     * staged patch is charged against $budget when non-null, so a caller that
-     * shares one WalkerBudget across walkers gets a single cumulative
-     * projected-body bound (codex #15).
+     * $process receives each decoded string value and returns
+     * `array{0:string, 1:list<MaskEvent>}`: the replacement plus the events the
+     * caller wants reported for it. A patch is staged only when the replacement
+     * differs from the decoded original (spec §9.3: only actual replacements
+     * generate patches), and ONLY THEN are its events committed — so an identity
+     * Strategy (replacement === decoded, e.g. no PII found) produces no phantom
+     * event even when other fields in the same request do get patched (codex
+     * med). Each staged patch is charged against $budget when non-null.
      *
-     * @param \Closure(string): string $process Decoded value -> replacement.
-     * @return list<JsonPatchEntry>
+     * @param \Closure(string): array{0:string, 1:list<MaskEvent>} $process
+     * @return array{0: list<JsonPatchEntry>, 1: list<MaskEvent>}
      */
     public static function walk(JsonValue $node, string $json, \Closure $process, ?WalkerBudget $budget = null): array
     {
         $walker = new self($json, $process, $budget);
         $walker->visitSchemaNode($node);
-        return $walker->patches;
+        return [$walker->patches, $walker->events];
     }
 
     /**
@@ -213,11 +220,14 @@ final class SchemaWalker
             return;
         }
         $decoded = $this->decodeString($value);
-        $replacement = ($this->process)($decoded);
+        [$replacement, $events] = ($this->process)($decoded);
         if ($replacement !== $decoded) {
             $encodedLength = \strlen(JsonPatch::encodeStringContent($replacement));
             $this->budget?->stage($value->contentLength, $encodedLength);
             $this->patches[] = new JsonPatchEntry($value->contentSpan(), $replacement);
+            foreach ($events as $event) {
+                $this->events[] = $event;
+            }
         }
     }
 
