@@ -1,6 +1,13 @@
 <?php
 
 // src/Internal/StreamingMultiStringMatcher.php
+//
+// Derived from wikimedia/aho-corasick v2.0.0 (Apache License 2.0).
+// This subclass extends MultiStringMatcher and accesses its protected
+// $outputs / $searchKeywords fields to stream matches incrementally.
+// Upstream: https://packagasist.org/packages/wikimedia/aho-corasick
+// Licensed under the Apache License, Version 2.0.
+// Upgrading requires re-verifying the protected field layout of v2.0.0.
 
 namespace Yolorouter\Llmasking\Internal;
 

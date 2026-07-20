@@ -10,6 +10,9 @@
         "ext-mbstring": "*",
         "ext-pcre": "*",
         "ext-zlib": "*",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^1.1 || ^2.0",
         "wikimedia/aho-corasick": "2.0.0"
     },
     "require-dev": {

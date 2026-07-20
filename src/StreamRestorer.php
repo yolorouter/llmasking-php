@@ -105,6 +105,8 @@ final class StreamRestorer
         $maxOut = $this->session->engine->maxOutputBytes;
         $out = '';
         $events = [];
+        $pieces = [];
+        $curLit = '';
         $evCount = 0;
         $repBytes = 0;
         $emitPtr = 0;
@@ -117,12 +119,20 @@ final class StreamRestorer
             }
             $out .= $piece;
         };
+        // Pieces (spec §9.6 per-event placement): a literal run accumulates into
+        // the current literal piece; each placeholder closes the literal piece
+        // and becomes its own piece carrying its event, so a downstream segment
+        // stream attaches the event to the segment with this placeholder's last
+        // byte instead of the whole replacement's end.
         foreach ($tokens as $t) {
             $startRel = $t->start - $this->base;
-            $append(\substr($this->input, $emitPtr, $startRel - $emitPtr));
+            $literal = \substr($this->input, $emitPtr, $startRel - $emitPtr);
+            $append($literal);
+            $curLit .= $literal;
             $raw = \substr($this->input, $startRel, $t->end - $t->start);
             $plaintext = $this->session->resolvePlaceholderToken($t);
-            $append($plaintext ?? $raw);
+            $pieceText = $plaintext ?? $raw;
+            $append($pieceText);
             $emitPtr = $startRel + ($t->end - $t->start);
 
             if ($this->eventCount + $evCount >= Engine::MAX_RESTORE_EVENTS) {
@@ -132,7 +142,13 @@ final class StreamRestorer
             if ($this->reportBytes + $repBytes + $eb > Engine::MAX_RESTORE_REPORT_BYTES) {
                 $this->abort(new LimitExceededException('cumulative stream restore report bytes exceed limit'));
             }
-            $events[] = new RestoreEvent($t->entity, 0, 0, $raw, $plaintext !== null);
+            $event = new RestoreEvent($t->entity, 0, 0, $raw, $plaintext !== null);
+            $events[] = $event;
+            if ($curLit !== '') {
+                $pieces[] = [$curLit, []];
+                $curLit = '';
+            }
+            $pieces[] = [$pieceText, [$event]];
             $evCount++;
             $repBytes += $eb;
         }
@@ -143,8 +159,13 @@ final class StreamRestorer
         $validatedAbs = $this->inputLen - \strlen($this->utf8Partial);
         $committedAbs = \min($this->lexer->committedOffset(), $validatedAbs);
         $committedRel = $committedAbs - $this->base;
-        $append(\substr($this->input, $emitPtr, $committedRel - $emitPtr));
+        $trail = \substr($this->input, $emitPtr, $committedRel - $emitPtr);
+        $append($trail);
+        $curLit .= $trail;
         $emitPtr = $committedRel;
+        if ($curLit !== '') {
+            $pieces[] = [$curLit, []];
+        }
 
         // Commit: advance budgets, drop the emitted prefix from $input.
         $this->outputLen += \strlen($out);
@@ -154,7 +175,7 @@ final class StreamRestorer
             $this->input = \substr($this->input, $emitPtr);
             $this->base += $emitPtr;
         }
-        return new StreamRestoreResult($out, $events);
+        return new StreamRestoreResult($out, $events, $pieces);
     }
 
     /** Record $e as the terminal failure and rethrow it. */
