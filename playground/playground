@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# playground/playground — launch the llmasking-php playground web UI.
+#
+# Usage:  ./playground/playground [--port 8787]
+#
+# Opens a local web server on 127.0.0.1. Open the printed URL in a browser,
+# configure your LLM endpoint, and send a message to see the
+# anonymize → LLM → restore pipeline side-by-side.
+#
+# SECURITY: binds to loopback only. The playground forwards whatever baseUrl
+# the browser submits and echoes back error responses — do NOT bind to a
+# non-loopback address on an untrusted network.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PORT="8787"
+if [[ "${1:-}" == "--port" ]]; then PORT="${2:-8787}"; elif [[ "${1:-}" != "" ]]; then PORT="$1"; fi
+
+URL="http://127.0.0.1:${PORT}"
+echo "🚀 llmasking-php playground → ${URL}"
+echo "   Press Ctrl-C to stop."
+exec php -S "127.0.0.1:${PORT}" playground/server.php

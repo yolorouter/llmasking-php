@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLMasking playground</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink-950: #f4f5f7;
+    --ink-900: #ffffff;
+    --ink-800: #eceef1;
+    --fg: #14171c;
+    --muted: #656d78;
+    --line: #dde1e6;
+    --redact-500: #c23b3b;
+    --redact-050: #fbe9e9;
+    --clear-500: #1e9e73;
+    --clear-050: #e3f6ee;
+    --signal-500: #a5760a;
+    --signal-050: #faf1dd;
+    --shadow: 0 1px 2px rgba(20,23,28,.04), 0 8px 24px rgba(20,23,28,.06);
+    --radius-lg: 16px;
+    --radius-md: 11px;
+    --radius-sm: 7px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink-950: #0a0c10;
+      --ink-900: #14171d;
+      --ink-800: #1c2129;
+      --fg: #eceef1;
+      --muted: #838c98;
+      --line: #262b33;
+      --redact-500: #e0625f;
+      --redact-050: #2c1616;
+      --clear-500: #35c491;
+      --clear-050: #12271f;
+      --signal-500: #e8c158;
+      --signal-050: #2b2311;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.4);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--ink-950);
+    color: var(--fg);
+    line-height: 1.5;
+    overflow: hidden;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--clear-500); outline-offset: 2px; }
+
+  /* ---------- shell ---------- */
+  .shell { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---------- header ---------- */
+  header.topbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--ink-900);
+    overflow: hidden;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; white-space: nowrap; flex: none; }
+  .brand svg { flex: none; }
+  .brand .stamp-o { color: var(--redact-500); }
+  .topbar-spacer { flex: 1; min-width: 4px; }
+  .conn-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--ink-800);
+    font-size: 12.5px; color: var(--muted); cursor: pointer;
+    max-width: 260px; flex: 0 1 auto; min-width: 0;
+  }
+  .conn-chip:hover { border-color: var(--clear-500); color: var(--fg); }
+  .conn-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .conn-chip .dot.ok { background: var(--clear-500); }
+  .conn-chip .dot.warn { background: var(--signal-500); }
+  .conn-chip span.label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lang-select {
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 26px 6px 12px;
+    background: var(--ink-800) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="%23838c98" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat right 8px center / 12px 12px;
+    color: var(--fg); font-size: 12px; font-weight: 700; cursor: pointer; appearance: none; flex: none;
+  }
+  .lang-select:hover { border-color: var(--clear-500); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--ink-800); color: var(--muted); cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--fg); border-color: var(--clear-500); }
+  @media (max-width: 520px) {
+    .brand-suffix { display: none; }
+    .conn-chip .label { max-width: 30vw; }
+  }
+
+  /* ---------- layout ---------- */
+  .layout { flex: 1 1 auto; display: grid; grid-template-columns: minmax(0,1fr) 380px; min-height: 0; }
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- chat column ---------- */
+  .chat-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .chat-thread { flex: 1 1 auto; overflow-y: auto; padding: 22px 22px 8px; scroll-behavior: smooth; }
+  .empty-state {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 14px; padding: 20px; color: var(--muted);
+  }
+  .empty-state .glyph {
+    width: 52px; height: 52px; border-radius: 14px; background: var(--ink-800); border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center; color: var(--redact-500);
+  }
+  .empty-state h2 { margin: 0; font-size: 16px; color: var(--fg); }
+  .empty-state p { margin: 0; max-width: 360px; font-size: 13.5px; }
+  .empty-state .example-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+  .empty-state button.example {
+    border: 1px dashed var(--line); background: transparent; color: var(--clear-500);
+    padding: 8px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  }
+  .empty-state button.example:hover { border-color: var(--clear-500); background: var(--clear-050); }
+
+  .turn { max-width: 78%; margin: 0 0 18px; display: flex; flex-direction: column; }
+  .turn.user { margin-left: auto; align-items: flex-end; }
+  .turn.assistant { margin-right: auto; align-items: flex-start; }
+  .bubble {
+    border-radius: var(--radius-md); padding: 11px 14px; font-size: 14px; white-space: pre-wrap; word-break: break-word;
+    cursor: pointer; border: 1px solid transparent; transition: border-color .12s;
+  }
+  .turn.user .bubble { background: var(--clear-500); color: #fff; border-bottom-right-radius: 4px; }
+  .turn.assistant .bubble { background: var(--ink-900); border: 1px solid var(--line); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
+  .turn.assistant.error .bubble { border-color: var(--redact-500); background: var(--redact-050); }
+  .turn.inspected .bubble { border-color: var(--clear-500); }
+  .turn .meta-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+  .stamp {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .05em; padding: 3px 7px 3px 6px; border-radius: 5px;
+    transform: rotate(-2deg);
+  }
+  .stamp.pending { color: var(--muted); background: var(--ink-800); border: 1px dashed var(--line); }
+  .stamp.masked { color: var(--redact-500); background: var(--redact-050); border: 1px solid var(--redact-500); }
+  .stamp.restored { color: var(--clear-500); background: var(--clear-050); border: 1px solid var(--clear-500); }
+  .stamp.warn { color: var(--signal-500); background: var(--signal-050); border: 1px solid var(--signal-500); cursor: pointer; }
+  .stamp.error { color: var(--redact-500); background: var(--redact-050); border: 1px solid var(--redact-500); }
+  @keyframes stamp-in {
+    0% { opacity: 0; transform: scale(1.5) rotate(-14deg); }
+    70% { opacity: 1; transform: scale(.95) rotate(-1deg); }
+    100% { opacity: 1; transform: scale(1) rotate(-2deg); }
+  }
+  .stamp.just-in { animation: stamp-in .32s ease-out; }
+  .spinner {
+    width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--clear-500);
+    animation: spin .7s linear infinite; flex: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .redact-chip {
+    display: inline-block; padding: 0 4px; border-radius: 4px; font-weight: 700;
+    color: var(--redact-500); background: repeating-linear-gradient(135deg, var(--redact-050), var(--redact-050) 4px, transparent 4px, transparent 8px);
+    border: 1px solid var(--redact-500);
+  }
+
+  /* ---------- composer ---------- */
+  .composer { flex: 0 0 auto; border-top: 1px solid var(--line); padding: 12px 18px 16px; background: var(--ink-900); }
+  .composer-box {
+    display: flex; align-items: flex-end; gap: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: var(--ink-950); padding: 8px 8px 8px 14px;
+  }
+  .composer-box:focus-within { border-color: var(--clear-500); }
+  .composer textarea {
+    flex: 1; resize: none; border: none; background: transparent; color: var(--fg); font-family: inherit;
+    font-size: 14px; line-height: 1.5; padding: 7px 0; max-height: 160px; min-height: 22px;
+  }
+  .composer textarea:focus { outline: none; }
+  .stream-toggle {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; user-select: none; flex: none;
+  }
+  .stream-toggle input { display: none; }
+  .stream-toggle.on { color: var(--clear-500); border-color: var(--clear-500); background: var(--clear-050); }
+  .example-select {
+    font-size: 11.5px; font-weight: 700; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; flex: none;
+    background: transparent; max-width: 108px;
+  }
+  .example-select:hover { color: var(--fg); border-color: var(--clear-500); }
+  .send-btn {
+    flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--clear-500); color: #fff;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .send-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .send-btn:hover:not(:disabled) { filter: brightness(1.08); }
+  .composer-hint { margin-top: 7px; font-size: 11px; color: var(--muted); padding-left: 4px; }
+  .inspector-toggle-mobile { display: none; }
+  @media (max-width: 880px) {
+    .inspector-toggle-mobile { display: inline-flex; }
+  }
+
+  /* ---------- inspector ---------- */
+  .inspector-col {
+    display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--ink-900); min-height: 0;
+  }
+  @media (max-width: 880px) {
+    .inspector-col { display: none; }
+    .inspector-col.mobile-open { display: flex; position: fixed; inset: 0; z-index: 40; }
+  }
+  .inspector-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line);
+  }
+  .inspector-head h2 {
+    margin: 0; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); flex: 1;
+  }
+  .inspector-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px 24px; }
+  .inspector-empty { color: var(--muted); font-size: 13px; padding: 20px 4px; }
+  .stage {
+    border: 1px solid var(--line); border-radius: var(--radius-md); margin-bottom: 12px; overflow: hidden; background: var(--ink-950);
+  }
+  .stage h3 {
+    margin: 0; padding: 9px 12px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); display: flex; align-items: center; gap: 7px; background: var(--ink-800);
+  }
+  .stage h3 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--line); }
+  .stage.filled h3 .dot { background: var(--muted); }
+  .stage.mask h3 .dot { background: var(--redact-500); }
+  .stage.restore h3 .dot { background: var(--clear-500); }
+  .stage pre {
+    margin: 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto;
+  }
+  .stage .stage-empty { padding: 12px; font-size: 12px; color: var(--muted); }
+  .unmatched-note {
+    margin: 0 12px 10px; padding: 8px 10px; border-radius: 7px; font-size: 12px;
+    color: var(--signal-500); background: var(--signal-050); border: 1px solid var(--signal-500);
+  }
+
+  /* ---------- settings drawer ---------- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(10,12,16,.45); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 50;
+  }
+  .backdrop.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, 100vw); background: var(--ink-900);
+    border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s ease-out; z-index: 51;
+    display: flex; flex-direction: column; box-shadow: var(--shadow);
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head { flex: none; display: flex; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .drawer-head h2 { margin: 0; font-size: 14px; font-weight: 700; flex: 1; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 18px; }
+  .promo-link {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 12px; margin-bottom: 18px; border-radius: 9px;
+    border: 1px solid var(--clear-500); background: var(--clear-050); color: var(--clear-500);
+    font-size: 12.5px; font-weight: 700; text-decoration: none;
+  }
+  .promo-link:hover { filter: brightness(1.05); }
+  .promo-link svg { flex: none; }
+  .field { margin-bottom: 18px; }
+  .field label { display: block; font-size: 12.5px; font-weight: 700; margin-bottom: 6px; }
+  .field .input-row { position: relative; }
+  .field input[type=text], .field input[type=password] {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--ink-950);
+    color: var(--fg); font-size: 13.5px; font-family: inherit;
+  }
+  .field input:focus { outline: none; border-color: var(--clear-500); }
+  .field select {
+    width: 100%; padding: 9px 36px 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--ink-950);
+    color: var(--fg); font-size: 13.5px; font-family: inherit; cursor: pointer; appearance: none;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="%23838c98" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+    background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
+  }
+  .field select:focus { outline: none; border-color: var(--clear-500); }
+  .field .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .eye-btn {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: none; background: transparent;
+    color: var(--muted); cursor: pointer; padding: 4px;
+  }
+  .drawer-foot { flex: none; padding: 14px 18px; border-top: 1px solid var(--line); }
+  .drawer-foot button {
+    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--ink-800);
+    color: var(--fg); font-weight: 700; font-size: 13.5px; cursor: pointer;
+  }
+  .drawer-foot button:hover { border-color: var(--clear-500); }
+  .shake { animation: shake .32s; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M7.5 10V7a4.5 4.5 0 0 1 9 0v3" stroke="currentColor" stroke-width="1.8"/>
+        <circle cx="12" cy="15" r="1.6" class="stamp-o" fill="currentColor"/>
+      </svg>
+      <span>LLMasking <span class="brand-suffix" style="font-weight:400;color:var(--muted)">playground</span></span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button class="conn-chip" id="connChip" type="button" onclick="openDrawer()">
+      <span class="dot warn" id="connDot"></span>
+      <span class="label" id="connLabel" data-i18n="conn.unset">未配置接口</span>
+    </button>
+    <select class="lang-select" id="langSelect" aria-label="Language">
+      <option value="en">English</option>
+      <option value="zh">简体中文</option>
+      <option value="ja">日本語</option>
+      <option value="es">Español</option>
+      <option value="fr">Français</option>
+      <option value="de">Deutsch</option>
+      <option value="ko">한국어</option>
+    </select>
+    <button class="icon-btn" type="button" onclick="openDrawer()" data-i18n-title="settings.open" title="设置">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7"/><path d="M19.4 13a7.6 7.6 0 0 0 .1-2l2-1.4-2-3.5-2.3.8a7.6 7.6 0 0 0-1.7-1L15 3H9l-.5 2.4a7.6 7.6 0 0 0-1.7 1l-2.3-.8-2 3.5L4.5 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.5 2.3-.8a7.6 7.6 0 0 0 1.7 1L9 21h6l.5-2.4a7.6 7.6 0 0 0 1.7-1l2.3.8 2-3.5-2.1-1.5Z" stroke="currentColor" stroke-width="1.3"/></svg>
+    </button>
+  </header>
+
+  <div class="layout">
+    <section class="chat-col">
+      <div class="chat-thread" id="chatThread" aria-live="polite"></div>
+      <div class="composer">
+        <div class="composer-box">
+          <textarea id="messageInput" rows="1" data-i18n-placeholder="composer.placeholder"
+            placeholder="输入包含手机号/邮箱/身份证/密钥等敏感信息的句子……"></textarea>
+          <button type="button" class="stream-toggle" id="streamToggle" onclick="toggleStream()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h7l-1 8 10-13h-7l1-7Z"/></svg>
+            <span data-i18n="composer.stream">流式</span>
+          </button>
+          <select class="example-select" id="exampleSelect" onchange="handleExampleSelect(this)">
+            <option value="" data-i18n="composer.examples" selected disabled>示例……</option>
+            <option value="example.text" data-i18n="empty.example">个人信息示例</option>
+            <option value="example.secrets" data-i18n="empty.exampleSecrets">API 密钥示例</option>
+          </select>
+          <button class="icon-btn inspector-toggle-mobile" type="button" onclick="toggleMobileInspector()" data-i18n-title="inspector.title" title="处理流水线">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button class="send-btn" id="sendBtn" type="button" onclick="handleSend()" data-i18n-title="composer.send" title="发送">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3.5 12 20 4l-6 16-3-6-7-2Z" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="composer-hint" data-i18n="composer.hint">Enter 发送 · Shift+Enter 换行</div>
+      </div>
+    </section>
+
+    <aside class="inspector-col" id="inspectorCol">
+      <div class="inspector-head">
+        <h2 data-i18n="inspector.title">处理流水线</h2>
+        <button class="icon-btn inspector-toggle-mobile" type="button" onclick="toggleMobileInspector()" aria-label="close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 5 14 14M19 5 5 19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="inspector-body" id="inspectorBody"></div>
+    </aside>
+  </div>
+</div>
+
+<div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <h2 data-i18n="settings.title">接口设置</h2>
+    <button class="icon-btn" type="button" onclick="closeDrawer()" aria-label="close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 5 14 14M19 5 5 19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <a class="promo-link" href="https://yolorouter.com/" target="_blank" rel="noopener noreferrer">
+      <span data-i18n="settings.promo">还没有 API Key？前往 yolorouter.com 获取</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M7 17 17 7M8 7h9v9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    <div class="field">
+      <label for="protocol" data-i18n="settings.protocol">协议</label>
+      <div class="input-row">
+        <select id="protocol">
+          <option value="openai">OpenAI (Chat Completions)</option>
+          <option value="anthropic">Anthropic (Messages)</option>
+          <option value="gemini">Gemini (generateContent)</option>
+        </select>
+      </div>
+      <div class="hint" data-i18n="settings.protocolHint">OpenAI 兼容接口选 OpenAI，Anthropic 原生接口选 Anthropic，Google Gemini 选 Gemini</div>
+    </div>
+    <div class="field">
+      <label for="baseUrl" data-i18n="settings.baseUrl">API Base URL</label>
+      <div class="input-row">
+        <input type="text" id="baseUrl" placeholder="https://api.yolorouter.com/v1">
+      </div>
+      <div class="hint" data-i18n="settings.baseUrlHint">任何 OpenAI 兼容接口都可以，如 DeepSeek: https://api.deepseek.com/v1</div>
+    </div>
+    <div class="field">
+      <label for="model" data-i18n="settings.model">Model</label>
+      <div class="input-row">
+        <input type="text" id="model" placeholder="deepseek-v4-flash">
+      </div>
+    </div>
+    <div class="field">
+      <label for="apiKey" data-i18n="settings.apiKey">API Key</label>
+      <div class="input-row">
+        <input type="password" id="apiKey" placeholder="sk-...">
+        <button class="eye-btn" type="button" onclick="toggleKeyVisible()" aria-label="toggle visibility">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" id="eyeIcon"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/></svg>
+        </button>
+      </div>
+      <div class="hint" data-i18n="settings.apiKeyHint">Key 只会从浏览器发到本机运行的这个程序，再由本机直接转发给上面配置的接口，不会经过任何第三方服务器；仅保存在本机浏览器 localStorage 中。</div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <button type="button" onclick="closeDrawer()" data-i18n="settings.close">关闭</button>
+  </div>
+</aside>
+
+<script>
+const I18N = {
+  zh: {
+    "conn.unset": "未配置接口",
+    "settings.open": "设置",
+    "settings.title": "接口设置",
+    "settings.promo": "还没有 API Key？前往 yolorouter.com 获取",
+    "settings.protocol": "API 协议",
+    "settings.protocolHint": "OpenAI 兼容接口选 OpenAI，Anthropic 原生接口选 Anthropic，Google Gemini 选 Gemini",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "任何 OpenAI 兼容接口都可以，如 DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "Model",
+    "settings.apiKey": "API Key",
+    "settings.apiKeyHint": "Key 只会从浏览器发到本机运行的这个程序，再由本机直接转发给上面配置的接口，不会经过任何第三方服务器；仅保存在本机浏览器 localStorage 中。",
+    "settings.close": "关闭",
+    "composer.placeholder": "输入包含手机号/邮箱/身份证/密钥等敏感信息的句子……",
+    "composer.stream": "流式",
+    "composer.examples": "示例……",
+    "composer.send": "发送",
+    "composer.hint": "Enter 发送 · Shift+Enter 换行",
+    "inspector.title": "处理流水线",
+    "inspector.empty": "发送一条消息，或点击左侧任意一条消息查看其处理细节。",
+    "inspector.turn": "第 {n} 轮",
+    "stage.input": "① 原始输入",
+    "stage.masked": "② 已脱敏（发送内容）",
+    "stage.raw": "③ 模型原始返回",
+    "stage.restored": "④ 已还原",
+    "stage.empty": "尚未产生",
+    "empty.title": "开始一次脱敏测试",
+    "empty.body": "输入一句包含敏感信息的话，看看 LLMasking 如何在发送前脱敏、收到回复后还原。",
+    "empty.example": "个人信息示例",
+    "empty.exampleSecrets": "API 密钥示例",
+    "example.text": "我是张三，手机号是13800138000，身份证号是11010519491231002X，邮箱是zhangsan@example.com，请帮我写一封请假邮件。",
+    "example.secrets": "帮我看看这几个 LLM 平台的 API Key 配置对不对？",
+    "stamp.pending": "处理中",
+    "stamp.masked": "已脱敏",
+    "stamp.restored": "已还原",
+    "stamp.error": "请求失败",
+    "needsConfig": "请先完成接口配置",
+    "needsMessage": "请输入测试消息",
+  },
+  en: {
+    "conn.unset": "Not configured",
+    "settings.open": "Settings",
+    "settings.title": "API Settings",
+    "settings.promo": "Don't have an API key yet? Get one at yolorouter.com",
+    "settings.protocol": "Protocol",
+    "settings.protocolHint": "Pick OpenAI for OpenAI-compatible endpoints, Anthropic for the native Claude API, Gemini for Google Gemini",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "Any OpenAI-compatible endpoint works — e.g. DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "Model",
+    "settings.apiKey": "API Key",
+    "settings.apiKeyHint": "Your key only travels from the browser to this program on your machine, which forwards it directly to the endpoint above — never through any third-party server. Saved only in this browser's local storage.",
+    "settings.close": "Close",
+    "composer.placeholder": "Type a message with a phone number, email, ID number, or API key…",
+    "composer.stream": "Stream",
+    "composer.examples": "Examples…",
+    "composer.send": "Send",
+    "composer.hint": "Enter to send · Shift+Enter for a new line",
+    "inspector.title": "Pipeline",
+    "inspector.empty": "Send a message, or click any bubble on the left to inspect it.",
+    "inspector.turn": "Turn {n}",
+    "stage.input": "① Original input",
+    "stage.masked": "② Masked (sent)",
+    "stage.raw": "③ Raw model reply",
+    "stage.restored": "④ Restored",
+    "stage.empty": "Nothing yet",
+    "empty.title": "Start a redaction test",
+    "empty.body": "Send a message with some sensitive info and watch LLMasking mask it before it leaves, then restore it in the reply.",
+    "empty.example": "Try a personal-info example",
+    "empty.exampleSecrets": "Try an API key example",
+    "example.text": "I'm Jane Doe, my phone is (415) 555-0142, my SSN is 123-45-6789, and my email is jane.doe@example.com — please help me draft a leave request email.",
+    "example.secrets": "Can you check if these LLM provider API keys look right?",
+    "stamp.pending": "Working",
+    "stamp.masked": "Masked",
+    "stamp.restored": "Restored",
+    "stamp.error": "Failed",
+    "needsConfig": "Set up your API connection first",
+    "needsMessage": "Type a message to test",
+  },
+  ja: {
+    "conn.unset": "未設定",
+    "settings.open": "設定",
+    "settings.title": "API設定",
+    "settings.promo": "APIキーをお持ちでないですか？yolorouter.com で取得",
+    "settings.protocol": "プロトコル",
+    "settings.protocolHint": "OpenAI互換ならOpenAI、AnthropicネイティブならAnthropic、Google GeminiならGeminiを選択",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "OpenAI互換のエンドポイントなら何でも使えます。例：DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "Model",
+    "settings.apiKey": "APIキー",
+    "settings.apiKeyHint": "キーはブラウザからお使いのマシン上で動くこのプログラムにのみ送信され、そこから直接上記のエンドポイントに転送されます。第三者のサーバーを経由することはありません。このブラウザの localStorage にのみ保存されます。",
+    "settings.close": "閉じる",
+    "composer.placeholder": "電話番号・メール・ID番号・APIキーなど、機密情報を含む文章を入力してください……",
+    "composer.stream": "ストリーミング",
+    "composer.examples": "サンプル……",
+    "composer.send": "送信",
+    "composer.hint": "Enterで送信 · Shift+Enterで改行",
+    "inspector.title": "パイプライン",
+    "inspector.empty": "メッセージを送信するか、左側の吹き出しをクリックして詳細を確認してください。",
+    "inspector.turn": "ターン {n}",
+    "stage.input": "① 元の入力",
+    "stage.masked": "② マスク済み（送信内容）",
+    "stage.raw": "③ モデルの生の応答",
+    "stage.restored": "④ 復元済み",
+    "stage.empty": "まだありません",
+    "empty.title": "マスキングテストを開始",
+    "empty.body": "機密情報を含むメッセージを送信し、LLMasking が送信前にマスクし、返信で復元する様子を確認してください。",
+    "empty.example": "個人情報のサンプルを試す",
+    "empty.exampleSecrets": "APIキーのサンプルを試す",
+    "example.text": "田中太郎です。電話番号は+819012345678、カード番号は4111111111111111、メールはtanaka@example.comです。休暇届のメールを書いてください。",
+    "example.secrets": "これらのLLMプロバイダーのAPIキー設定が正しいか確認してもらえますか？",
+    "stamp.pending": "処理中",
+    "stamp.masked": "マスク済み",
+    "stamp.restored": "復元済み",
+    "stamp.error": "失敗",
+    "needsConfig": "先にAPI接続を設定してください",
+    "needsMessage": "テストするメッセージを入力してください",
+  },
+  es: {
+    "conn.unset": "Sin configurar",
+    "settings.open": "Ajustes",
+    "settings.title": "Ajustes de la API",
+    "settings.promo": "¿Aún no tienes una API Key? Consíguela en yolorouter.com",
+    "settings.protocol": "Protocolo",
+    "settings.protocolHint": "Elige OpenAI para endpoints compatibles con OpenAI, Anthropic para la API nativa de Claude, Gemini para Google Gemini",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "Cualquier endpoint compatible con OpenAI funciona, p. ej. DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "Modelo",
+    "settings.apiKey": "API Key",
+    "settings.apiKeyHint": "Tu clave solo viaja del navegador a este programa en tu máquina, que la reenvía directamente al endpoint indicado arriba, nunca a través de un servidor de terceros. Se guarda solo en el almacenamiento local de este navegador.",
+    "settings.close": "Cerrar",
+    "composer.placeholder": "Escribe un mensaje con un teléfono, correo, número de identificación o clave de API…",
+    "composer.stream": "Streaming",
+    "composer.examples": "Ejemplos…",
+    "composer.send": "Enviar",
+    "composer.hint": "Enter para enviar · Shift+Enter para nueva línea",
+    "inspector.title": "Flujo de procesamiento",
+    "inspector.empty": "Envía un mensaje, o haz clic en cualquier burbuja de la izquierda para inspeccionarla.",
+    "inspector.turn": "Turno {n}",
+    "stage.input": "① Entrada original",
+    "stage.masked": "② Enmascarado (enviado)",
+    "stage.raw": "③ Respuesta original del modelo",
+    "stage.restored": "④ Restaurado",
+    "stage.empty": "Nada todavía",
+    "empty.title": "Inicia una prueba de anonimización",
+    "empty.body": "Envía un mensaje con información sensible y observa cómo LLMasking lo enmascara antes de enviarlo, y lo restaura en la respuesta.",
+    "empty.example": "Probar un ejemplo con datos personales",
+    "empty.exampleSecrets": "Probar un ejemplo de clave de API",
+    "example.text": "Soy María García, mi teléfono es +34612345678, mi tarjeta es 4111111111111111 y mi correo es maria.garcia@example.com — ayúdame a redactar un correo de solicitud de permiso.",
+    "example.secrets": "¿Puedes revisar si estas claves de API de proveedores de LLM son correctas?",
+    "stamp.pending": "Procesando",
+    "stamp.masked": "Enmascarado",
+    "stamp.restored": "Restaurado",
+    "stamp.error": "Fallido",
+    "needsConfig": "Configura primero tu conexión a la API",
+    "needsMessage": "Escribe un mensaje para probar",
+  },
+  fr: {
+    "conn.unset": "Non configuré",
+    "settings.open": "Réglages",
+    "settings.title": "Réglages de l'API",
+    "settings.promo": "Pas encore de clé API ? Obtenez-en une sur yolorouter.com",
+    "settings.protocol": "Protocole",
+    "settings.protocolHint": "Choisissez OpenAI pour les endpoints compatibles OpenAI, Anthropic pour l'API native Claude, Gemini pour Google Gemini",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "Tout endpoint compatible OpenAI fonctionne, p. ex. DeepSeek : https://api.deepseek.com/v1",
+    "settings.model": "Modèle",
+    "settings.apiKey": "Clé API",
+    "settings.apiKeyHint": "Votre clé ne va du navigateur qu'à ce programme sur votre machine, qui la transmet directement à l'endpoint ci-dessus — jamais via un serveur tiers. Elle n'est stockée que dans le stockage local de ce navigateur.",
+    "settings.close": "Fermer",
+    "composer.placeholder": "Saisissez un message avec un numéro de téléphone, un e-mail, un numéro d'identité ou une clé API…",
+    "composer.stream": "Streaming",
+    "composer.examples": "Exemples…",
+    "composer.send": "Envoyer",
+    "composer.hint": "Entrée pour envoyer · Maj+Entrée pour un saut de ligne",
+    "inspector.title": "Pipeline",
+    "inspector.empty": "Envoyez un message, ou cliquez sur une bulle à gauche pour l'inspecter.",
+    "inspector.turn": "Tour {n}",
+    "stage.input": "① Saisie d'origine",
+    "stage.masked": "② Masqué (envoyé)",
+    "stage.raw": "③ Réponse brute du modèle",
+    "stage.restored": "④ Restauré",
+    "stage.empty": "Rien pour l'instant",
+    "empty.title": "Démarrer un test d'anonymisation",
+    "empty.body": "Envoyez un message contenant des informations sensibles et regardez LLMasking le masquer avant l'envoi, puis le restaurer dans la réponse.",
+    "empty.example": "Essayer un exemple avec des données personnelles",
+    "empty.exampleSecrets": "Essayer un exemple de clé API",
+    "example.text": "Je suis Jean Dupont, mon téléphone est +33612345678, ma carte est 4111111111111111 et mon email est jean.dupont@example.com — aide-moi à rédiger un email de demande de congé.",
+    "example.secrets": "Peux-tu vérifier si ces clés API de fournisseurs de LLM sont correctes ?",
+    "stamp.pending": "En cours",
+    "stamp.masked": "Masqué",
+    "stamp.restored": "Restauré",
+    "stamp.error": "Échec",
+    "needsConfig": "Configurez d'abord votre connexion à l'API",
+    "needsMessage": "Saisissez un message à tester",
+  },
+  de: {
+    "conn.unset": "Nicht konfiguriert",
+    "settings.open": "Einstellungen",
+    "settings.title": "API-Einstellungen",
+    "settings.promo": "Noch keinen API-Schlüssel? Auf yolorouter.com bekommen",
+    "settings.protocol": "Protokoll",
+    "settings.protocolHint": "Wählen Sie OpenAI für OpenAI-kompatible Endpunkte, Anthropic für die native Claude-API, Gemini für Google Gemini",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "Jeder OpenAI-kompatible Endpunkt funktioniert, z. B. DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "Modell",
+    "settings.apiKey": "API-Schlüssel",
+    "settings.apiKeyHint": "Ihr Schlüssel wird nur vom Browser an dieses auf Ihrem Rechner laufende Programm gesendet, das ihn direkt an den obigen Endpunkt weiterleitet — niemals über einen Drittserver. Wird nur im localStorage dieses Browsers gespeichert.",
+    "settings.close": "Schließen",
+    "composer.placeholder": "Geben Sie eine Nachricht mit Telefonnummer, E-Mail, Ausweisnummer oder API-Schlüssel ein…",
+    "composer.stream": "Streaming",
+    "composer.examples": "Beispiele…",
+    "composer.send": "Senden",
+    "composer.hint": "Enter zum Senden · Umschalt+Enter für neue Zeile",
+    "inspector.title": "Pipeline",
+    "inspector.empty": "Senden Sie eine Nachricht oder klicken Sie links auf eine Sprechblase, um sie zu untersuchen.",
+    "inspector.turn": "Runde {n}",
+    "stage.input": "① Ursprüngliche Eingabe",
+    "stage.masked": "② Maskiert (gesendet)",
+    "stage.raw": "③ Rohe Modellantwort",
+    "stage.restored": "④ Wiederhergestellt",
+    "stage.empty": "Noch nichts",
+    "empty.title": "Anonymisierungstest starten",
+    "empty.body": "Senden Sie eine Nachricht mit sensiblen Daten und sehen Sie, wie LLMasking sie vor dem Senden maskiert und in der Antwort wiederherstellt.",
+    "empty.example": "Beispiel mit persönlichen Daten ausprobieren",
+    "empty.exampleSecrets": "API-Schlüssel-Beispiel ausprobieren",
+    "example.text": "Ich bin Max Mustermann, meine Telefonnummer ist +4915123456789, meine Kartennummer ist 4111111111111111 und meine E-Mail ist max.mustermann@example.com — bitte hilf mir, eine Urlaubsantrags-E-Mail zu schreiben.",
+    "example.secrets": "Kannst du prüfen, ob diese API-Schlüssel für LLM-Anbieter korrekt sind?",
+    "stamp.pending": "Läuft",
+    "stamp.masked": "Maskiert",
+    "stamp.restored": "Wiederhergestellt",
+    "stamp.error": "Fehlgeschlagen",
+    "needsConfig": "Richten Sie zuerst Ihre API-Verbindung ein",
+    "needsMessage": "Geben Sie eine Testnachricht ein",
+  },
+  ko: {
+    "conn.unset": "설정되지 않음",
+    "settings.open": "설정",
+    "settings.title": "API 설정",
+    "settings.promo": "API 키가 아직 없으신가요? yolorouter.com 에서 발급받으세요",
+    "settings.protocol": "프로토콜",
+    "settings.protocolHint": "OpenAI 호환 엔드포인트는 OpenAI, Anthropic 네이티브 API는 Anthropic, 구글 Gemini는 Gemini 선택",
+    "settings.baseUrl": "API Base URL",
+    "settings.baseUrlHint": "OpenAI 호환 엔드포인트라면 무엇이든 사용할 수 있습니다. 예: DeepSeek: https://api.deepseek.com/v1",
+    "settings.model": "모델",
+    "settings.apiKey": "API 키",
+    "settings.apiKeyHint": "키는 브라우저에서 사용자 컴퓨터에서 실행 중인 이 프로그램으로만 전송되며, 이 프로그램이 위에 설정된 엔드포인트로 직접 전달합니다. 제3자 서버를 거치지 않으며, 이 브라우저의 localStorage에만 저장됩니다.",
+    "settings.close": "닫기",
+    "composer.placeholder": "전화번호/이메일/주민등록번호/API 키 등 민감한 정보가 포함된 문장을 입력하세요…",
+    "composer.stream": "스트리밍",
+    "composer.examples": "예시……",
+    "composer.send": "전송",
+    "composer.hint": "Enter로 전송 · Shift+Enter로 줄바꿈",
+    "inspector.title": "처리 파이프라인",
+    "inspector.empty": "메시지를 보내거나 왼쪽의 말풍선을 클릭하여 세부 정보를 확인하세요.",
+    "inspector.turn": "{n}번째 대화",
+    "stage.input": "① 원본 입력",
+    "stage.masked": "② 마스킹됨 (전송 내용)",
+    "stage.raw": "③ 모델의 원본 응답",
+    "stage.restored": "④ 복원됨",
+    "stage.empty": "아직 없음",
+    "empty.title": "마스킹 테스트 시작하기",
+    "empty.body": "민감한 정보가 포함된 메시지를 보내고, LLMasking이 전송 전에 마스킹하고 응답에서 복원하는 과정을 확인하세요.",
+    "empty.example": "개인정보 예시 사용해보기",
+    "empty.exampleSecrets": "API 키 예시 사용해보기",
+    "example.text": "저는 김철수입니다. 전화번호는 +821012345678이고, 카드번호는 4111111111111111이며, 이메일은 chulsoo.kim@example.com입니다. 휴가 신청 이메일 작성을 도와주세요.",
+    "example.secrets": "이 LLM 제공업체 API 키들이 올바른지 확인해 주실 수 있나요?",
+    "stamp.pending": "처리 중",
+    "stamp.masked": "마스킹됨",
+    "stamp.restored": "복원됨",
+    "stamp.error": "실패",
+    "needsConfig": "먼저 API 연결을 설정하세요",
+    "needsMessage": "테스트할 메시지를 입력하세요",
+  },
+};
+
+const SUPPORTED_LANGS = ["en", "zh", "ja", "es", "fr", "de", "ko"];
+// document.documentElement.lang wants a full BCP 47 tag; our internal keys
+// are the short form already valid for most of these, except zh (Simplified
+// Chinese specifically, not just "any Chinese").
+const HTML_LANG_TAG = { zh: "zh-CN" };
+
+// Default baseURL per protocol — shared by loadConfig (stale-URL fix-up), the
+// protocol change handler (auto-switch), and updateBaseUrlPlaceholder. Defined
+// up here (before loadConfig is first called at `let cfg = loadConfig()`) so
+// the const is initialized in time and there's no temporal-dead-zone access.
+const protocolDefaultBaseURLs = {
+  openai: "https://api.yolorouter.com/v1",
+  anthropic: "https://api.anthropic.com/v1",
+  gemini: "https://api.yolorouter.com/v1beta",
+};
+
+// If baseUrl matches ANY protocol's default, return targetProto's default;
+// otherwise return baseUrl unchanged. Shared by loadConfig (migrate stale
+// URLs from before the auto-switch existed) and the protocol change handler
+// (switch on user action). A custom URL matching no default is preserved.
+function realignBaseUrl(baseUrl, targetProto) {
+  for (const proto in protocolDefaultBaseURLs) {
+    if (baseUrl === protocolDefaultBaseURLs[proto]) {
+      return protocolDefaultBaseURLs[targetProto];
+    }
+  }
+  return baseUrl;
+}
+
+function detectLang() {
+  const stored = localStorage.getItem("llmasking_lang");
+  if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
+  const browser = navigator.language.slice(0, 2).toLowerCase();
+  return SUPPORTED_LANGS.includes(browser) ? browser : "en";
+}
+
+let lang = detectLang();
+let cfg = loadConfig();
+let turns = [];
+let inspectedId = null;
+let nextId = 1;
+
+function t(key, vars) {
+  let s = (I18N[lang] && I18N[lang][key]) || key;
+  if (vars) for (const k in vars) s = s.replace("{" + k + "}", vars[k]);
+  return s;
+}
+
+function loadConfig() {
+  let cfg;
+  try {
+    cfg = {
+      protocol: localStorage.getItem("llmasking_protocol") || "openai",
+      baseUrl: localStorage.getItem("llmasking_baseUrl") || protocolDefaultBaseURLs.openai,
+      model: localStorage.getItem("llmasking_model") || "deepseek-v4-flash",
+      apiKey: localStorage.getItem("llmasking_apiKey") || "",
+      stream: localStorage.getItem("llmasking_stream") === "1",
+    };
+  } catch (e) {
+    cfg = { protocol: "openai", baseUrl: protocolDefaultBaseURLs.openai, model: "deepseek-v4-flash", apiKey: "", stream: false };
+  }
+  // Fix up a stale baseURL left over from a protocol switch made before the
+  // auto-switch below existed: if the saved baseURL is another protocol's
+  // default, realign it to the current protocol's default — so e.g. a user
+  // who last selected Gemini while baseUrl was still the OpenAI proxy gets a
+  // working URL on reload instead of a 404.
+  const aligned = realignBaseUrl(cfg.baseUrl, cfg.protocol);
+  if (aligned !== cfg.baseUrl) {
+    cfg.baseUrl = aligned;
+    try { localStorage.setItem("llmasking_baseUrl", cfg.baseUrl); } catch (e) { /* private mode */ }
+  }
+  return cfg;
+}
+
+function saveConfigField(key, storageKey, value) {
+  cfg[key] = value;
+  try { localStorage.setItem(storageKey, value); } catch (e) { /* private mode etc. */ }
+  renderConnChip();
+}
+
+/* ---------- i18n application ---------- */
+function applyI18n() {
+  document.documentElement.lang = HTML_LANG_TAG[lang] || lang;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
+    el.placeholder = t(el.getAttribute("data-i18n-placeholder"));
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach(el => {
+    el.title = t(el.getAttribute("data-i18n-title"));
+  });
+  document.getElementById("langSelect").value = lang;
+  renderConnChip();
+  renderThread();
+  renderInspector();
+}
+
+document.getElementById("langSelect").addEventListener("change", e => {
+  lang = e.target.value;
+  localStorage.setItem("llmasking_lang", lang);
+  applyI18n();
+});
+
+/* ---------- settings drawer ---------- */
+function openDrawer() {
+  document.getElementById("protocol").value = cfg.protocol || "openai";
+  document.getElementById("baseUrl").value = cfg.baseUrl;
+  document.getElementById("model").value = cfg.model;
+  document.getElementById("apiKey").value = cfg.apiKey;
+  updateBaseUrlPlaceholder();
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer").setAttribute("aria-hidden", "false");
+  document.getElementById("backdrop").classList.add("open");
+}
+function closeDrawer() {
+  document.getElementById("drawer").classList.remove("open");
+  document.getElementById("drawer").setAttribute("aria-hidden", "true");
+  document.getElementById("backdrop").classList.remove("open");
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeDrawer();
+});
+document.getElementById("protocol").addEventListener("change", e => {
+  const newProto = e.target.value;
+  // If the current baseURL is a known protocol default, switch it to the new
+  // protocol's default. A custom URL matching no default is left untouched.
+  const aligned = realignBaseUrl(cfg.baseUrl, newProto);
+  if (aligned !== cfg.baseUrl) {
+    cfg.baseUrl = aligned;
+    const input = document.getElementById("baseUrl");
+    if (input) input.value = cfg.baseUrl;
+    saveConfigField("baseUrl", "llmasking_baseUrl", cfg.baseUrl);
+  }
+  saveConfigField("protocol", "llmasking_protocol", newProto);
+  updateBaseUrlPlaceholder();
+});
+document.getElementById("baseUrl").addEventListener("input", e => saveConfigField("baseUrl", "llmasking_baseUrl", e.target.value.trim()));
+document.getElementById("model").addEventListener("input", e => saveConfigField("model", "llmasking_model", e.target.value.trim()));
+document.getElementById("apiKey").addEventListener("input", e => saveConfigField("apiKey", "llmasking_apiKey", e.target.value.trim()));
+
+function updateBaseUrlPlaceholder() {
+  const input = document.getElementById("baseUrl");
+  if (!input) return;
+  input.placeholder = protocolDefaultBaseURLs[cfg.protocol] || protocolDefaultBaseURLs.openai;
+}
+
+function toggleKeyVisible() {
+  const input = document.getElementById("apiKey");
+  input.type = input.type === "password" ? "text" : "password";
+}
+
+function renderConnChip() {
+  const configured = cfg.baseUrl && cfg.apiKey && cfg.model;
+  document.getElementById("connDot").className = "dot " + (configured ? "ok" : "warn");
+  const protoTag = cfg.protocol === "anthropic" ? "Anthropic" : cfg.protocol === "gemini" ? "Gemini" : "OpenAI";
+  document.getElementById("connLabel").textContent = configured
+    ? protoTag + " · " + cfg.model + " · " + cfg.baseUrl.replace(/^https?:\/\//, "")
+    : t("conn.unset");
+}
+
+/* ---------- stream toggle ---------- */
+function renderStreamToggle() {
+  document.getElementById("streamToggle").classList.toggle("on", cfg.stream);
+}
+function toggleStream() {
+  cfg.stream = !cfg.stream;
+  try { localStorage.setItem("llmasking_stream", cfg.stream ? "1" : ""); } catch (e) { /* private mode etc. */ }
+  renderStreamToggle();
+}
+
+/* ---------- mobile inspector ---------- */
+function toggleMobileInspector() {
+  document.getElementById("inspectorCol").classList.toggle("mobile-open");
+}
+
+/* ---------- composer ---------- */
+const messageInput = document.getElementById("messageInput");
+messageInput.addEventListener("input", () => {
+  messageInput.style.height = "auto";
+  messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + "px";
+});
+messageInput.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    handleSend();
+  }
+});
+
+function shakeConnChip() {
+  const chip = document.getElementById("connChip");
+  chip.classList.remove("shake");
+  void chip.offsetWidth;
+  chip.classList.add("shake");
+}
+
+function handleSend() {
+  const text = messageInput.value.trim();
+  if (!text) { messageInput.focus(); return; }
+  if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+    shakeConnChip();
+    openDrawer();
+    return;
+  }
+  messageInput.value = "";
+  messageInput.style.height = "auto";
+  startTurn(text);
+}
+
+/* ---------- escaping / highlighting ---------- */
+function escapeHTML(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function highlightPlaceholders(text) {
+  const escaped = escapeHTML(text);
+  return escaped.replace(/(\[[A-Z][A-Z0-9]*_\d+\]|【[A-Z][A-Z0-9]*_\d+】)/g,
+    '<span class="redact-chip">$1</span>');
+}
+
+/* ---------- turn lifecycle ---------- */
+function startTurn(input) {
+  const turn = {
+    id: nextId++,
+    input, masked: "", raw: "", restored: "", unmatched: [], maskedEvents: [], error: "",
+    status: "pending", // pending -> masked -> streaming(optional) -> done | error
+  };
+  turns.push(turn);
+  inspectedId = turn.id;
+  renderThread();
+  renderInspector();
+  document.getElementById("chatThread").scrollTop = 1e9;
+
+  if (cfg.stream) {
+    runStreamingTurn(turn);
+  } else {
+    runNonStreamingTurn(turn);
+  }
+}
+
+function refresh(turn) {
+  renderThread();
+  if (inspectedId === turn.id) renderInspector();
+  document.getElementById("chatThread").scrollTop = 1e9;
+}
+
+async function runNonStreamingTurn(turn) {
+  try {
+    const resp = await fetch("/api/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ protocol: cfg.protocol, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model, message: turn.input }),
+    });
+    const data = await resp.json();
+    if (data.maskedInput) { turn.masked = data.maskedInput; turn.status = "masked"; }
+    turn.maskedEvents = data.maskedEvents || [];
+    if (data.rawLlmResponse) turn.raw = data.rawLlmResponse;
+    if (data.error) {
+      turn.error = data.error;
+      turn.status = "error";
+      refresh(turn);
+      return;
+    }
+    turn.restored = data.restoredResponse;
+    turn.unmatched = data.unmatched || [];
+    turn.status = "done";
+    refresh(turn);
+  } catch (e) {
+    turn.error = String(e);
+    turn.status = "error";
+    refresh(turn);
+  }
+}
+
+async function runStreamingTurn(turn) {
+  try {
+    const resp = await fetch("/api/test/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ protocol: cfg.protocol, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model, message: turn.input }),
+    });
+    if (!resp.ok || !resp.body) {
+      turn.error = "HTTP " + resp.status;
+      turn.status = "error";
+      refresh(turn);
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let frameEnd;
+      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, frameEnd);
+        buffer = buffer.slice(frameEnd + 2);
+        handleSSEFrame(turn, frame);
+      }
+    }
+    if (turn.status !== "error") turn.status = "done";
+    refresh(turn);
+  } catch (e) {
+    turn.error = String(e);
+    turn.status = "error";
+    refresh(turn);
+  }
+}
+
+function handleSSEFrame(turn, frame) {
+  let event = "message", data = "";
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event: ")) event = line.slice(7);
+    else if (line.startsWith("data: ")) data = line.slice(6);
+  }
+  if (event === "error") {
+    turn.error = JSON.parse(data);
+    turn.status = "error";
+    refresh(turn);
+    return;
+  }
+  if (event === "masked") {
+    const m = JSON.parse(data);
+    turn.masked = typeof m === "string" ? m : m.text;
+    turn.maskedEvents = (typeof m === "object" && m.events) || [];
+    turn.status = "masked";
+    refresh(turn);
+    return;
+  }
+  if (event === "chunk") {
+    // Each "chunk" event carries only this delta, not the full
+    // accumulated text-so-far (a prior version resent everything on every
+    // event, which is quadratic work for both server and browser as chunk
+    // count grows) — append here instead of replacing.
+    const parsed = JSON.parse(data);
+    turn.raw += parsed.raw;
+    turn.restored += parsed.restored;
+    refresh(turn);
+  }
+  if (event === "done") {
+    // "restored" here is only the final withheld tail StreamRestorer.Flush
+    // produced — raw has no such tail, every raw byte already arrived via
+    // "chunk" events above.
+    const parsed = JSON.parse(data);
+    turn.restored += parsed.restored;
+    turn.unmatched = parsed.unmatched || [];
+    refresh(turn);
+  }
+}
+
+/* ---------- rendering: chat thread ---------- */
+// The three fake key lines are format/regex-driven, not natural language —
+// identical in every locale, so they live here once instead of being
+// copy-pasted into all 7 translations of "example.secrets" (only the intro
+// sentence actually differs per locale).
+const SAMPLE_API_KEYS =
+  "OPENAI_API_KEY=sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJ\n" +
+  "ANTHROPIC_API_KEY=sk-ant-api03-QwErTyUiOpAsDfGhJkLzXcVbNm0123456789QWERTYUIOP\n" +
+  "GOOGLE_API_KEY=AIzaSyD1234567890abcdefghijklmnopqrstuv";
+
+function exampleText(key) {
+  if (key === "example.secrets") return t(key) + "\n" + SAMPLE_API_KEYS;
+  return t(key || "example.text");
+}
+function fillExample(key) {
+  messageInput.value = exampleText(key);
+  messageInput.dispatchEvent(new Event("input"));
+  messageInput.focus();
+}
+function handleExampleSelect(sel) {
+  if (!sel.value) return;
+  fillExample(sel.value);
+  sel.value = "";
+}
+
+function renderThread() {
+  const el = document.getElementById("chatThread");
+  if (turns.length === 0) {
+    el.innerHTML =
+      '<div class="empty-state">' +
+        '<div class="glyph"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 10V7a4.5 4.5 0 0 1 9 0v3" stroke="currentColor" stroke-width="1.8"/></svg></div>' +
+        '<h2>' + t("empty.title") + '</h2>' +
+        '<p>' + t("empty.body") + '</p>' +
+        '<div class="example-row">' +
+          '<button class="example" type="button" onclick="fillExample(\'example.text\')">' + t("empty.example") + '</button>' +
+          '<button class="example" type="button" onclick="fillExample(\'example.secrets\')">' + t("empty.exampleSecrets") + '</button>' +
+        '</div>' +
+      '</div>';
+    return;
+  }
+  el.innerHTML = turns.map(renderTurnHTML).join("");
+}
+
+function stampFor(turn) {
+  if (turn.status === "error") {
+    return '<span class="stamp error just-in">✕ ' + t("stamp.error") + '</span>';
+  }
+  if (turn.status === "done") {
+    return '<span class="stamp restored just-in">✓ ' + t("stamp.restored") + '</span>' +
+      (turn.unmatched && turn.unmatched.length
+        ? '<span class="stamp warn" onclick="event.stopPropagation(); inspectTurn(' + turn.id + ')">⚠ ' + turn.unmatched.length + '</span>'
+        : '');
+  }
+  if (turn.status === "masked" || turn.status === "streaming") {
+    return '<span class="stamp masked">' + t("stamp.masked") + '</span><span class="spinner"></span>';
+  }
+  return '<span class="stamp pending"><span class="spinner"></span> ' + t("stamp.pending") + '</span>';
+}
+
+function renderTurnHTML(turn) {
+  const inspectedCls = turn.id === inspectedId ? " inspected" : "";
+  const errorCls = turn.status === "error" ? " error" : "";
+  const replyBody = turn.status === "error"
+    ? escapeHTML(turn.error)
+    : escapeHTML(turn.restored || "");
+  return (
+    '<div class="turn user' + inspectedCls + '">' +
+      '<div class="bubble" onclick="inspectTurn(' + turn.id + ')">' + escapeHTML(turn.input) + '</div>' +
+    '</div>' +
+    '<div class="turn assistant' + inspectedCls + errorCls + '">' +
+      '<div class="bubble" onclick="inspectTurn(' + turn.id + ')">' + (replyBody || "&nbsp;") + '</div>' +
+      '<div class="meta-row">' + stampFor(turn) + '</div>' +
+    '</div>'
+  );
+}
+
+function inspectTurn(id) {
+  inspectedId = id;
+  renderThread();
+  renderInspector();
+}
+
+/* ---------- rendering: inspector ---------- */
+function stageHTML(cls, labelKey, content, highlight) {
+  const filled = content && content.length > 0;
+  const body = filled
+    ? '<pre>' + (highlight ? highlightPlaceholders(content) : escapeHTML(content)) + '</pre>'
+    : '<div class="stage-empty">' + t("stage.empty") + '</div>';
+  return '<div class="stage' + (filled ? " filled " + cls : "") + '"><h3><span class="dot"></span>' + t(labelKey) + '</h3>' + body + '</div>';
+}
+
+function renderInspector() {
+  const body = document.getElementById("inspectorBody");
+  const turn = turns.find(x => x.id === inspectedId);
+  if (!turn) {
+    body.innerHTML = '<div class="inspector-empty">' + t("inspector.empty") + '</div>';
+    return;
+  }
+  let html = stageHTML("", "stage.input", turn.input, false);
+  html += stageHTML("mask", "stage.masked", turn.masked, true);
+  if (turn.maskedEvents && turn.maskedEvents.length > 0) {
+    html += '<div class="unmatched-note" style="color:var(--accent-500);border-color:var(--accent-200)">🔍 ' +
+      turn.maskedEvents.map(e => e.entity + ' → ' + e.replacement + (e.reversible ? '' : ' ✗') +
+        ' (' + (typeof e.score === 'number' ? e.score.toFixed(2) : e.score) + ')').join(', ') + '</div>';
+  }
+  html += stageHTML("", "stage.raw", turn.raw, true);
+  html += stageHTML("restore", "stage.restored", turn.status === "error" ? "" : turn.restored, false);
+  if (turn.unmatched && turn.unmatched.length > 0) {
+    html += '<div class="unmatched-note">⚠ ' + turn.unmatched.length + ' — ' + turn.unmatched.map(e => e.placeholder).join(", ") + '</div>';
+  }
+  if (turn.error) {
+    html += '<div class="unmatched-note" style="color:var(--redact-500);background:var(--redact-050);border-color:var(--redact-500)">' + escapeHTML(turn.error) + '</div>';
+  }
+  body.innerHTML = html;
+}
+
+/* ---------- init ---------- */
+renderStreamToggle();
+applyI18n();
+</script>
+</body>
+</html>
