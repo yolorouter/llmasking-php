@@ -71,15 +71,9 @@ final class MaskingClient implements ClientInterface
      * Response-side body digest / signature headers. When the response body is
      * actually rewritten (JSON patches or SSE transform), the digest can no
      * longer be verified, so per spec §9.4 the response degrades to a failed
-     * body rather than silently carrying a stale signature.
+     * body rather than silently carrying a stale signature. The set matches the
+     * request-side {@see INTEGRITY_HEADERS}; one constant covers both.
      */
-    private const RESPONSE_INTEGRITY_HEADERS = [
-        'Content-MD5',
-        'Digest',
-        'Content-Digest',
-        'Signature',
-        'Signature-Input',
-    ];
 
     /**
      * Representation headers removed from a failed-body response (spec §9.4):
@@ -786,7 +780,7 @@ final class MaskingClient implements ClientInterface
      */
     private function hasResponseIntegrityHeaders(ResponseInterface $response): bool
     {
-        foreach (self::RESPONSE_INTEGRITY_HEADERS as $header) {
+        foreach (self::INTEGRITY_HEADERS as $header) {
             if ($response->hasHeader($header)) {
                 return true;
             }

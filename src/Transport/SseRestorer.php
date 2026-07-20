@@ -14,6 +14,7 @@ use Yolorouter\Llmasking\Internal\JsonPatch;
 use Yolorouter\Llmasking\Internal\JsonPatchEntry;
 use Yolorouter\Llmasking\Internal\JsonScalar;
 use Yolorouter\Llmasking\Internal\JsonString;
+use Yolorouter\Llmasking\Internal\JsonTree;
 use Yolorouter\Llmasking\Internal\SegmentEmitter;
 use Yolorouter\Llmasking\Internal\JsonSyntaxException;
 use Yolorouter\Llmasking\Internal\JsonTokenizer;
@@ -1209,7 +1210,7 @@ final class SseRestorer
                 continue;
             } catch (LlmaskingException $e) {
                 $wrapped = $e instanceof StreamRestoreException ? $e : new StreamRestoreException('blanket flush failed: ' . $e->getMessage(), 0, $e);
-                $this->failPair($wrapped);
+                $this->fail($wrapped);
             }
             $route->flushed = true;
             $this->accrueRestoredOutput($result->text);
@@ -1220,7 +1221,7 @@ final class SseRestorer
             $frameLen = $this->synthesizedFrameLength($route, $result->text);
             $newTotal = self::satAdd($this->emittedSseProduced, $frameLen);
             if ($newTotal > $this->totalEmittedSseBudget) {
-                $this->failPair(new StreamRestoreException('total emitted SSE bytes exceed budget'));
+                $this->fail(new StreamRestoreException('total emitted SSE bytes exceed budget'));
             }
             $this->emittedSseProduced = $newTotal;
             // Stream the frame (template + per-piece tail + suffix), attaching
@@ -1405,11 +1406,7 @@ final class SseRestorer
 
     private static function decodeJsonString(JsonString $s, string $json): string
     {
-        $quoted = \substr($json, $s->start, $s->end - $s->start);
-        $result = \json_decode($quoted, false, 512, \JSON_THROW_ON_ERROR);
-        \assert(\is_string($result));
-
-        return $result;
+        return JsonTree::decodeString($s, $json);
     }
 
     /**
@@ -1417,14 +1414,7 @@ final class SseRestorer
      */
     private static function membersByName(JsonObject $obj, string $name, string $json): array
     {
-        $out = [];
-        foreach ($obj->members as $member) {
-            if (self::decodeJsonString($member->key, $json) === $name) {
-                $out[] = $member->value;
-            }
-        }
-
-        return $out;
+        return JsonTree::membersByName($obj, $name, $json);
     }
 
     private static function rawToken(JsonValue $v, string $json): string
@@ -1505,12 +1495,6 @@ final class SseRestorer
     }
 
     private function fail(\Throwable $e): never
-    {
-        $this->failed = $e;
-        throw $e;
-    }
-
-    private function failPair(\Throwable $e): never
     {
         $this->failed = $e;
         throw $e;

@@ -240,13 +240,7 @@ final class SchemaWalker
      */
     private function membersByName(JsonObject $obj, string $name): array
     {
-        $out = [];
-        foreach ($obj->members as $member) {
-            if ($this->decodeString($member->key) === $name) {
-                $out[] = $member->value;
-            }
-        }
-        return $out;
+        return JsonTree::membersByName($obj, $name, $this->json);
     }
 
     /**
@@ -255,11 +249,6 @@ final class SchemaWalker
      */
     private function decodeString(JsonString $s): string
     {
-        // Substring includes framing quotes so json_decode sees a valid JSON string.
-        $quoted = \substr($this->json, $s->start, $s->end - $s->start);
-        $result = \json_decode($quoted, false, 512, \JSON_THROW_ON_ERROR);
-        \assert(\is_string($result));
-
-        return $result;
+        return JsonTree::decodeString($s, $this->json);
     }
 }

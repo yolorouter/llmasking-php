@@ -293,13 +293,7 @@ final class ResponseWalker
      */
     private function membersByName(JsonObject $obj, string $name): array
     {
-        $out = [];
-        foreach ($obj->members as $member) {
-            if ($this->decodeString($member->key) === $name) {
-                $out[] = $member->value;
-            }
-        }
-        return $out;
+        return JsonTree::membersByName($obj, $name, $this->doc->json);
     }
 
     /**
@@ -308,10 +302,6 @@ final class ResponseWalker
      */
     private function decodeString(JsonString $s): string
     {
-        $quoted = \substr($this->doc->json, $s->start, $s->end - $s->start);
-        $result = \json_decode($quoted, false, 512, \JSON_THROW_ON_ERROR);
-        \assert(\is_string($result));
-
-        return $result;
+        return JsonTree::decodeString($s, $this->doc->json);
     }
 }
