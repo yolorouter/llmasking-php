@@ -16,6 +16,7 @@ use Yolorouter\Llmasking\Internal\JsonScalar;
 use Yolorouter\Llmasking\Internal\JsonString;
 use Yolorouter\Llmasking\Internal\JsonTree;
 use Yolorouter\Llmasking\Internal\SegmentEmitter;
+use Yolorouter\Llmasking\Internal\Utf8;
 use Yolorouter\Llmasking\Internal\JsonSyntaxException;
 use Yolorouter\Llmasking\Internal\JsonTokenizer;
 use Yolorouter\Llmasking\Internal\JsonValue;
@@ -628,7 +629,8 @@ final class SseRestorer
             return;
         }
 
-        $lineEnding = $this->pickLineEnding($lines, $firstDataIdx);
+        // Reuse the line ending captured earlier for route creation (same args).
+        $lineEnding = $this->currentEventLineEnding;
 
         // Dry-run (spec §9.5 / codex #2): compute the total emitted byte length
         // WITHOUT building the whole escaped data line, then atomically check
@@ -1447,30 +1449,12 @@ final class SseRestorer
     private function assertChunkUtf8(string $chunk): void
     {
         $s = $this->utf8Partial . $chunk;
-        $incomplete = self::trailingIncompleteLen($s);
+        $incomplete = Utf8::trailingIncompleteLen($s);
         $check = $incomplete === 0 ? $s : \substr($s, 0, \strlen($s) - $incomplete);
         if ($check !== '' && !\mb_check_encoding($check, 'UTF-8')) {
             $this->fail(new StreamRestoreException('SSE chunk is not valid UTF-8'));
         }
         $this->utf8Partial = $incomplete === 0 ? '' : \substr($s, \strlen($s) - $incomplete);
-    }
-
-    private static function trailingIncompleteLen(string $s): int
-    {
-        $n = \strlen($s);
-        for ($k = 1; $k <= 3 && $n - $k >= 0; $k++) {
-            $c = \ord($s[$n - $k]);
-            if ($c < 0x80) {
-                return 0;
-            }
-            if (($c & 0xC0) === 0xC0) {
-                $expected = $c >= 0xF0 ? 4 : ($c >= 0xE0 ? 3 : 2);
-
-                return $k < $expected ? $k : 0;
-            }
-        }
-
-        return 0;
     }
 
     private static function satAdd(int $a, int $b): int

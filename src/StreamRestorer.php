@@ -7,6 +7,7 @@ namespace Yolorouter\Llmasking;
 use Yolorouter\Llmasking\Exception\{InvalidUTF8Exception, LimitExceededException, StreamClosedException};
 use Yolorouter\Llmasking\Internal\PlaceholderLexer;
 use Yolorouter\Llmasking\Internal\PlaceholderToken;
+use Yolorouter\Llmasking\Internal\Utf8;
 
 /**
  * Incremental placeholder restorer for chunked responses (e.g. SSE). Bound to
@@ -85,7 +86,7 @@ final class StreamRestorer
     private function assertChunkUtf8(string $chunk): void
     {
         $s = $this->utf8Partial . $chunk;
-        $incomplete = self::trailingIncompleteLen($s);
+        $incomplete = Utf8::trailingIncompleteLen($s);
         $check = $incomplete === 0 ? $s : \substr($s, 0, \strlen($s) - $incomplete);
         if ($check !== '' && !\mb_check_encoding($check, 'UTF-8')) {
             $this->abort(new InvalidUTF8Exception('stream chunk is not valid UTF-8'));
@@ -196,23 +197,5 @@ final class StreamRestorer
         // buffers (a long upper-case/digit run held in $entity/$digits/$held
         // on top of $input) — all charged to the SSE state budget (codex).
         return \strlen($this->input) + \strlen($this->utf8Partial) + $this->lexer->retainedBytes();
-    }
-
-    /** Length of a truncated UTF-8 sequence at the end of $s (0 if none). */
-    private static function trailingIncompleteLen(string $s): int
-    {
-        $n = \strlen($s);
-        for ($k = 1; $k <= 3 && $n - $k >= 0; $k++) {
-            $c = \ord($s[$n - $k]);
-            if ($c < 0x80) {
-                return 0; // ASCII byte: the codepoint ending here is complete
-            }
-            if (($c & 0xC0) === 0xC0) { // lead byte
-                $expected = $c >= 0xF0 ? 4 : ($c >= 0xE0 ? 3 : 2);
-                return $k < $expected ? $k : 0;
-            }
-            // continuation byte: keep walking back
-        }
-        return 0;
     }
 }
