@@ -36,6 +36,29 @@ namespace Yolorouter\Llmasking\Internal;
 final class StreamingMultiStringMatcher extends \AhoCorasick\MultiStringMatcher
 {
     /**
+     * Verify at construction that the upstream protected fields this adapter
+     * reads ($outputs, $searchKeywords) exist. If a future patch release
+     * renames or removes them, keyword matching would silently produce no
+     * output (fail-open: PII passes through unmasked). Fail closed instead.
+     */
+    /**
+     * @param list<string> $keywords
+     */
+    public function __construct(array $keywords)
+    {
+        parent::__construct($keywords);
+        $reflection = new \ReflectionClass(\AhoCorasick\MultiStringMatcher::class);
+        foreach (['outputs', 'searchKeywords'] as $field) {
+            if (!$reflection->hasProperty($field)) {
+                throw new \RuntimeException(
+                    'wikimedia/aho-corasick protected field $' . $field
+                    . ' not found — version drift from 2.0.x; keyword masking is unsafe',
+                );
+            }
+        }
+    }
+
+    /**
      * Yield [scannedEnd, list<[start, keyword]>] for each byte position that
      * has at least one pattern ending there. scannedEnd is the exclusive end
      * offset (byte index + 1). Same-end matches are batched into one step.
