@@ -748,14 +748,7 @@ final class MaskingClient implements ClientInterface
      */
     private function isExactApplicationJson(MessageInterface $msg): bool
     {
-        $values = $msg->getHeader('Content-Type');
-        if (\count($values) !== 1) {
-            return false;
-        }
-        $parts = \explode(';', $values[0], 2);
-        $mediaType = \trim($parts[0]);
-
-        return \strtolower($mediaType) === 'application/json';
+        return $this->isExactMediaType($msg, 'application/json');
     }
 
     /**
@@ -764,6 +757,17 @@ final class MaskingClient implements ClientInterface
      */
     private function isExactTextEventStream(MessageInterface $msg): bool
     {
+        return $this->isExactMediaType($msg, 'text/event-stream');
+    }
+
+    /**
+     * Shared exact-media-type check: a single Content-Type header line whose
+     * type/subtype (case-insensitive, ignoring parameters such as charset) equals
+     * $expected. Multiple conflicting Content-Type values cannot be resolved →
+     * false.
+     */
+    private function isExactMediaType(MessageInterface $msg, string $expected): bool
+    {
         $values = $msg->getHeader('Content-Type');
         if (\count($values) !== 1) {
             return false;
@@ -771,7 +775,7 @@ final class MaskingClient implements ClientInterface
         $parts = \explode(';', $values[0], 2);
         $mediaType = \trim($parts[0]);
 
-        return \strtolower($mediaType) === 'text/event-stream';
+        return \strtolower($mediaType) === $expected;
     }
 
     /**
